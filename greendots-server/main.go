@@ -48,6 +48,10 @@ type runPlanTestItem struct {
 	Params map[string]string `json:"params"`
 }
 
+type statusPollResponse struct {
+	WorkersToCheck []int `json:"workers_to_check"`
+}
+
 var projectsDir string
 
 func docsHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +123,7 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 	err = json.NewEncoder(w).Encode(result)
 	if err != nil {
 		log.Printf("%s %s: json encoder: %v", r.Method, r.URL.Path, err)
+		return
 	}
 }
 
@@ -136,6 +141,7 @@ func projectRunsHandler(w http.ResponseWriter, r *http.Request) {
 	err = json.NewEncoder(w).Encode(result)
 	if err != nil {
 		log.Printf("%s %s: json encoder: %v", r.Method, r.URL.Path, err)
+		return
 	}
 }
 
@@ -212,6 +218,49 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var expected_sizes []int
+	err := json.NewDecoder(r.Body).Decode(&expected_sizes)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	if len(expected_sizes) == 0 {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	project := r.PathValue("project")
+	run := r.PathValue("run")
+
+	for {
+		workers_to_check := []int{}
+		for i, expected_size := range expected_sizes {
+			statusPath := filepath.Join(projectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
+			stat, err := os.Stat(statusPath)
+			if err != nil {
+				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+				return
+			}
+			if stat.Size() > int64(expected_size) {
+				workers_to_check = append(workers_to_check, i)
+			}
+		}
+		if len(workers_to_check) == 0 {
+			time.Sleep(1 * time.Second)
+			continue
+		} else {
+			err := json.NewEncoder(w).Encode(statusPollResponse{WorkersToCheck: workers_to_check})
+			if err != nil {
+				log.Printf("%s %s: json encoder: %v", r.Method, r.URL.Path, err)
+				return
+			}
+			return
+		}
+	}
+}
+
 func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/jsonl")
 
@@ -235,6 +284,7 @@ func main() {
 	http.HandleFunc("GET /api/v1/projects/{project}/runs", projectRunsHandler)
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/plan", runPlanHandler)
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", runStatusSummaryHandler)
+	http.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", runStatusPollHandler)
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", runStatusStreamHandler)
 	// TODO: http.HandleFunc("PUT /api/v1/projects/{project}/runs/{run}/test/{test}/status", todo)
 	http.HandleFunc("/", NotFoundHandler)

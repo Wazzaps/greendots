@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { useProjectsList } from '@/controllers/TestDataController';
+import { TestDataController } from '@/controllers/TestDataController';
+import { inject } from 'vue';
 
-const projects = await useProjectsList();
+const test_data = inject<TestDataController>('test_data')!;
+const projects = await test_data.getProjectsList();
 </script>
 
 <template>

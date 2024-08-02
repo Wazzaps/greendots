@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { useProjectRuns } from '@/controllers/TestDataController';
+import type { TestDataController } from '@/controllers/TestDataController';
+import { inject } from 'vue';
 import { useRoute } from 'vue-router';
 
 const route = useRoute();
-const project_runs = await useProjectRuns(route.params.project as string);
+const test_data = inject<TestDataController>('test_data')!;
+const project_runs = await test_data.getProjectRuns(route.params.project as string);
 </script>
 
 <template>
