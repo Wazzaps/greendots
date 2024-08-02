@@ -1,0 +1,103 @@
+Welcome to the GreenDots API server!
+
+Here are the available endpoints:
+
+# GET /api/v1/projects
+This endpoint returns a list of projects, and a small subset of their runs.
+
+Example Response:
+{
+    "projects": [
+        {
+            "id": "project1",
+            "name": "Project 1",
+            "runs": [
+                {
+                    "id": "run1",
+                    "name": "Run 1",
+                    "pretty_age": "2 hours ago",
+                    "created_at": "2022-01-02T12:00:00Z"
+                },
+                {
+                    "id": "run2",
+                    "name": "Run 2",
+                    "pretty_age": "1 day ago",
+                    "created_at": "2022-01-01T12:00:00Z"
+                }
+            ]
+        }
+    ]
+}
+
+# GET /api/v1/projects/{project_id}/runs
+This endpoint returns a list of all runs for a specific project.
+
+Example Response:
+{
+    "runs": [
+        {
+            "id": "run1",
+            "name": "Run 1",
+            "pretty_age": "2 hours ago",
+            "created_at": "2022-01-02T12:00:00Z"
+        }
+    ]
+}
+
+# GET /api/v1/projects/{project_id}/runs/{run_id}/plan
+This endpoint returns the plan for a specific run as-is.
+It describes all of the tests, their parameters, and which parameters become rows.
+It also includes the worker_count, which determines the number of status files.
+
+Example Response:
+{
+    "worker_count": 8,
+    "groups": {
+        "group1": [
+            {
+                "id": "test_module.py::test_name[x86-1]",
+                "name": "test_name",
+                "params": {
+                    "arch": "x86",
+                    "variant": "1"
+                }
+            },
+            {
+                "id": "test_module.py::test_name[x86-2]",
+                "name": "test_name",
+                "params": {
+                    "arch": "x86",
+                    "variant": "2"
+                }
+            }
+        ]
+    },
+    "row_params": ["arch"]
+}
+
+# GET /api/v1/projects/{project_id}/runs/{run_id}/status_summary
+This endpoint returns the last line relating to each test, from every status file.
+It also returns the byte offset of the end of each status file (not including partial objects).
+See the `status_stream` endpoint for the format.
+
+Example Response:
+{"type": "finish", "outcome": "passed", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.117364}
+
+# GET /api/v1/projects/{project_id}/runs/{run_id}/status_stream/{worker_id}
+This endpoint returns the status file relating to the specified worker.
+The status file is a JSON-Lines file, where each line is a JSON object.
+The intended usage is calling the `status_summary` endpoint to get the most recent state,
+then call this endpoint with the byte offset(s) you received in a Range header.
+
+The "outcome" field can be "progress", "passed", "failed", "skipped", or "error".
+A "progress" outcome contains a "progress" field (0.0-1.0) for the current progress.
+
+Example Response:
+{"type": "start", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.1110268}
+{"type": "setup", "outcome": "passed", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.1133199}
+{"type": "progress", "percentage": 0.0, "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.1917295}
+{"type": "progress", "percentage": 0.2, "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.3133454}
+{"type": "progress", "percentage": 0.4, "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.4347146}
+{"type": "call", "outcome": "passed", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.1155963}
+{"type": "teardown", "outcome": "passed", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.1171212}
+{"type": "finish", "outcome": "passed", "test": "test_thing.py::test_stdout[x86]", "time": 1722625667.117364}

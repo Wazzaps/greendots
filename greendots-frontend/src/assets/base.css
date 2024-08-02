@@ -1,0 +1,30 @@
+@import '@fontsource-variable/exo-2';
+@import '@fontsource/jockey-one';
+:root {
+  color-scheme: dark;
+}
+
+/* @media (prefers-color-scheme: dark) {
+  :root {
+
+  }
+} */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  font-weight: normal;
+}
+
+body {
+  background: #2c2b31;
+  color: #ffffff;
+  line-height: 1.6;
+  font-family: 'Exo 2 Variable', sans-serif;
+  font-size: 15px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
