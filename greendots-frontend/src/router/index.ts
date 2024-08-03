@@ -3,6 +3,7 @@ import HomeView from '@/views/HomeView.vue';
 import TestResultsView from '@/views/TestResultsView.vue';
 import TestLogsView from '@/views/TestLogsView.vue';
 import ProjectRunsView from '@/views/ProjectRunsView.vue';
+import NotFoundView from '@/views/NotFoundView.vue';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -26,6 +27,11 @@ const router = createRouter({
       path: '/:project/:run/:test',
       name: 'test_logs',
       component: TestLogsView
+    },
+    {
+      path: '/:pathMatch(.*)',
+      name: 'not_found',
+      component: NotFoundView
     }
   ],
   scrollBehavior(to, from, savedPosition) {
