@@ -30,9 +30,7 @@ export default function statusUpdateReducer(
     // non-passed outcomes are handled above
     test_items.value[test_idx].status = 'success';
     test_items.value[test_idx].progress = 1;
-  } else if (status_update.type == 'progress' || status_update.status == 'progress') {
-    // fixme: remove status_update.status (old format)
-
+  } else if (status_update.type == 'progress') {
     if (item.status == 'pending' || item.status == 'progress') {
       test_items.value[test_idx].status = 'progress';
       test_items.value[test_idx].progress = status_update.percentage;

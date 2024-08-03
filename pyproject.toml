@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "greendots_plugin"
+version = "0.1.0"
+description = "Pytest plugin for generating greendots-compatible logs and status updates"
+authors = [
+    "Itay Almog <itay2828@gmail.com>",
+    "David Shlemayev <david.shlemayev@gmail.com>",
+]
+license = "MIT"
+repository = "https://github.com/wazzaps/greendots"
+readme = "README.md"
+packages = [{ include = "greendots_plugin" }]
+
+classifiers = [
+    "Framework :: Pytest",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+]
+
+[tool.black]
+line-length = 99
+
+[tool.poetry.dependencies]
+python = "^3.8"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.2"
+ruff = "^0.5.6"
+
+[tool.poetry.plugins.pytest11]
+"greendots_plugin" = "greendots_plugin.plugin"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

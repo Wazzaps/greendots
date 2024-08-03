@@ -2,21 +2,27 @@ package main
 
 import (
 	"bufio"
+	"embed"
 	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/andanhm/go-prettytime"
 )
+
+const VERSION = "0.1.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -67,12 +73,74 @@ type logLine struct {
 	Time    float64 `json:"time"`
 }
 
-var projectsDir string
+type statusPollConfig struct {
+	SleepMs int `toml:"sleep_ms" json:"sleep_ms"`
+}
+
+type statusStreamConfig struct {
+	ChunkSize         int `toml:"chunk_size" json:"chunk_size"`
+	EofSleepMs        int `toml:"eof_sleep_ms" json:"eof_sleep_ms"`
+	FlushSleepMs      int `toml:"flush_sleep_ms" json:"flush_sleep_ms"`
+	LogTruncationSize int `toml:"log_truncation_size" json:"log_truncation_size"`
+}
+
+type logTailConfig struct {
+	DefaultLineCount int `toml:"default_line_count" json:"default_line_count"`
+}
+
+type logLevel struct {
+	Class     string `toml:"class" json:"class"`
+	Shortname string `toml:"shortname" json:"shortname"`
+}
+
+type clientTestStatusConfig struct {
+	PollIntervalMs  int `toml:"poll_interval_ms" json:"poll_interval_ms"`
+	BackoffMs       int `toml:"backoff_ms" json:"backoff_ms"`
+	BackoffJitterMs int `toml:"backoff_jitter_ms" json:"backoff_jitter_ms"`
+}
+
+type clientConfig struct {
+	TestStatus clientTestStatusConfig `toml:"test_status" json:"test_status"`
+}
+
+type greendotsConfig struct {
+	StatusPoll          statusPollConfig    `toml:"status_poll" json:"status_poll"`
+	StatusStream        statusStreamConfig  `toml:"status_stream" json:"status_stream"`
+	LogTail             logTailConfig       `toml:"log_tail" json:"log_tail"`
+	Client              clientConfig        `toml:"client" json:"client"`
+	AdditionalLogLevels map[string]logLevel `toml:"additional_log_levels" json:"additional_log_levels"`
+	ProjectsDir         string              `toml:"projects_dir" json:"projects_dir"`
+	ListenAddress       string              `toml:"listen_address" json:"listen_address"`
+}
+
+var config = greendotsConfig{
+	StatusPoll: statusPollConfig{
+		SleepMs: 1000,
+	},
+	StatusStream: statusStreamConfig{
+		ChunkSize:         1024,
+		EofSleepMs:        500,
+		FlushSleepMs:      300,
+		LogTruncationSize: 1024 * 1024,
+	},
+	LogTail: logTailConfig{
+		DefaultLineCount: 5,
+	},
+	Client: clientConfig{
+		TestStatus: clientTestStatusConfig{
+			PollIntervalMs:  500,
+			BackoffMs:       2000,
+			BackoffJitterMs: 1000,
+		},
+	},
+	ProjectsDir:   "",
+	ListenAddress: ":8080",
+}
 
 // -- Helpers --
 
 func getProjectRuns(project string) ([]run, error) {
-	projectPath := filepath.Join(projectsDir, project)
+	projectPath := filepath.Join(config.ProjectsDir, project)
 
 	entries, err := os.ReadDir(projectPath)
 	if err != nil {
@@ -85,7 +153,7 @@ func getProjectRuns(project string) ([]run, error) {
 			continue
 		}
 
-		info, err := os.Stat(projectPath)
+		info, err := os.Stat(filepath.Join(projectPath, e.Name()))
 		if err != nil {
 			continue
 		}
@@ -99,7 +167,7 @@ func getProjectRuns(project string) ([]run, error) {
 	}
 
 	sort.Slice(runs, func(i int, j int) bool {
-		return runs[i].CreatedAt < runs[j].CreatedAt
+		return runs[i].CreatedAt > runs[j].CreatedAt
 	})
 
 	return runs, nil
@@ -131,10 +199,24 @@ func docsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(apiDocs)
 }
 
+func getFullVersion() string {
+	build_info_str := ""
+	build_info, ok := debug.ReadBuildInfo()
+	if ok {
+		build_info_str = fmt.Sprintf("%v", build_info)
+	}
+	return fmt.Sprintf("version\t%s\n%s", VERSION, build_info_str)
+}
+
+func versionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fullWrite(w, getFullVersion())
+}
+
 func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	projectsDir, err := os.ReadDir(projectsDir)
+	projectsDir, err := os.ReadDir(config.ProjectsDir)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 	}
@@ -196,7 +278,7 @@ func runPlanHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	planPath := filepath.Join(projectsDir, project, run, "plan.json")
+	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
 	http.ServeFile(w, r, planPath)
 }
 
@@ -211,7 +293,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	planPath := filepath.Join(projectsDir, project, run, "plan.json")
+	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
 	planFd, err := os.Open(planPath)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -230,7 +312,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	final_statuses := make(map[string]interface{})
 	for status_idx := range plan.WorkerCount {
 		statusSummaryPath := filepath.Join(
-			projectsDir, project, run,
+			config.ProjectsDir, project, run,
 			fmt.Sprintf("status.%d.jsonl", status_idx),
 		)
 		fd, err := os.Open(statusSummaryPath)
@@ -292,7 +374,7 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 	for {
 		workers_to_check := []int{}
 		for i, expected_size := range expected_sizes {
-			statusPath := filepath.Join(projectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
+			statusPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
 			stat, err := os.Stat(statusPath)
 			if err != nil {
 				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -303,7 +385,7 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(workers_to_check) == 0 {
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(time.Duration(config.StatusPoll.SleepMs) * time.Millisecond)
 			continue
 		} else {
 			err := json.NewEncoder(w).Encode(statusPollResponse{WorkersToCheck: workers_to_check})
@@ -326,7 +408,7 @@ func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	statusStreamPath := filepath.Join(projectsDir, project, run, fmt.Sprintf("status.%s.jsonl", worker_id))
+	statusStreamPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%s.jsonl", worker_id))
 	http.ServeFile(w, r, statusStreamPath)
 }
 
@@ -347,6 +429,9 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 	var severity string
 	var severity_class string
 	switch log_line.Level {
+	case "DEBUG":
+		severity = "<span class=d>D</span>"
+		severity_class = "d"
 	case "INFO":
 		severity = "<span class=i>I</span>"
 		severity_class = "i"
@@ -359,14 +444,22 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 	case "ERROR":
 		severity = "<span class=e>E</span>"
 		severity_class = "e"
+	case "CRITICAL":
+		severity = "<span class=c>C</span>"
+		severity_class = "c"
 	default:
-		severity = fmt.Sprintf("<span class=i>%s</span>", log_line.Level)
-		severity_class = "i"
+		if val, ok := config.AdditionalLogLevels[log_line.Level]; ok {
+			severity = fmt.Sprintf("<span class=i>%s</span>", val.Shortname)
+			severity_class = val.Class
+		} else {
+			severity = fmt.Sprintf("<span class=i>%s</span>", log_line.Level)
+			severity_class = "i"
+		}
 	}
 	ts := time.Unix(int64(log_line.Time), int64((log_line.Time-float64(int(log_line.Time)))*1e9))
 	date := ts.Format("2006-01-02")
 	if date != *last_date {
-		html_lines += fmt.Sprintf("<span class=d>------- %s -------</span>\n", date)
+		html_lines += fmt.Sprintf("<span class=date>------- %s -------</span>\n", date)
 		*last_date = date
 	}
 
@@ -391,7 +484,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	log_path := filepath.Join(projectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+	log_path := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
 	log_fd, err := os.Open(log_path)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -413,7 +506,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 	// Read the log file, and keep trying on EOF
 	chunk_pipe_rd, chunk_pipe_wr := io.Pipe()
 	go func() {
-		chunk := make([]byte, 1024)
+		chunk := make([]byte, config.StatusStream.ChunkSize)
 		for {
 			n, err := log_fd.Read(chunk)
 			if err != nil && err != io.EOF {
@@ -422,7 +515,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if n == 0 || err == io.EOF {
 				// Reached EOF, wait a bit before trying again
-				time.Sleep(500 * time.Millisecond)
+				time.Sleep(time.Duration(config.StatusStream.EofSleepMs) * time.Millisecond)
 				continue
 			}
 			_, err = chunk_pipe_wr.Write(chunk[:n])
@@ -441,7 +534,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond)
 		}
 	}()
 
@@ -458,7 +551,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 		html_lines := formatJsonLogLine(json_line, &last_date, &last_time)
 		byte_counter += len(html_lines)
-		if !no_truncate && byte_counter > 1024*1024 {
+		if !no_truncate && byte_counter > config.StatusStream.LogTruncationSize {
 			err := fullWrite(w, "-- LOG TRUNCATED DUE TO LENGTH, <a href=log_stream?notrunc>Click here to keep going</a> --\n")
 			if err != nil {
 				return
@@ -476,7 +569,7 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
 
 	// Get line count from query
-	line_count := 5
+	line_count := config.LogTail.DefaultLineCount
 	if r.URL.Query().Get("lines") != "" {
 		_, err := fmt.Sscanf(r.URL.Query().Get("lines"), "%d", &line_count)
 		if err != nil {
@@ -493,13 +586,15 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	log_path := filepath.Join(projectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+	log_path := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
 	log_fd, err := os.Open(log_path)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
 	defer log_fd.Close()
+
+	// TODO: Seek to last 128KB of log file, it will probably be enough
 
 	// Send wrapper HTML
 	err = fullWriteBytes(w, logsViewPrefix)
@@ -534,25 +629,81 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func configHandler(w http.ResponseWriter, r *http.Request) {
+	err := json.NewEncoder(w).Encode(config)
+	if err != nil {
+		log.Printf("%s %s: json encoder: %v", r.Method, r.URL.Path, err)
+		return
+	}
+}
+
+//go:generate ./copy_frontend_dist.sh
+//go:embed frontend-dist/*
+var dist embed.FS
+
+func serveFrontendHandler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFileFS(w, r, dist, "frontend-dist/index.html")
+}
+
+func serveIconHandler(w http.ResponseWriter, r *http.Request) {
+	http.ServeFileFS(w, r, dist, "frontend-dist/favicon.ico")
+}
+
 func NotFoundHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s %s: not found", r.Method, r.URL.Path)
 	http.Error(w, "Not found", http.StatusNotFound)
 }
 
+func nocache(handler func(w http.ResponseWriter, r *http.Request)) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Cache-Control", "no-cache, no-store, no-transform, must-revalidate, private, max-age=0")
+		handler(w, r)
+	}
+}
+
 func main() {
-	flag.StringVar(&projectsDir, "projects-dir", "../example-data", "The path to where the projects are stored")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Show the version and exit")
+
+	var configPath string
+	flag.StringVar(&configPath, "config", "config.toml", "The path to the server configuration")
+
+	flag.Parse()
+
+	if showVersion {
+		fmt.Print(getFullVersion())
+		return
+	}
+
+	_, err := toml.DecodeFile(configPath, &config)
+	if err != nil {
+		log.Fatalln("Failed to parse config file:", err)
+	}
+
+	sub, err := fs.Sub(dist, "frontend-dist")
+	if err != nil {
+		log.Fatalln("Failed to parse config file:", err)
+	}
+	http.Handle("GET /assets/", http.FileServer(http.FS(sub)))
+
+	http.HandleFunc("GET /favicon.ico", nocache(serveIconHandler))
 
 	http.HandleFunc("GET /api/{$}", docsHandler)
-	http.HandleFunc("GET /{$}", docsHandler) // TODO: serve frontend instead
-	http.HandleFunc("GET /api/v1/projects", projectsListHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs", projectRunsHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/plan", runPlanHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", runStatusSummaryHandler)
-	http.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", runStatusPollHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", runStatusStreamHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", logStreamHandler)
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", logTailHandler)
-	// TODO: http.HandleFunc("PUT /api/v1/projects/{project}/runs/{run}/test/{test}/status", todo)
+	http.HandleFunc("GET /api/v1/config", nocache(configHandler))
+	http.HandleFunc("GET /api/v1/version", nocache(versionHandler))
+	http.HandleFunc("GET /api/v1/projects", nocache(projectsListHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs", nocache(projectRunsHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/plan", nocache(runPlanHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", nocache(runStatusSummaryHandler))
+	http.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", nocache(runStatusPollHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", nocache(runStatusStreamHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", nocache(logStreamHandler))
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", nocache(logTailHandler))
+
+	// TODO: use etag caching instead of nocache
+	// the assets doesn't need nocache nor etag since it has hashes in the name
+	// of the files so it handles it on its own
+	http.HandleFunc("GET /", nocache(serveFrontendHandler))
 	http.HandleFunc("/", NotFoundHandler)
 	log.Println("Listening on :8080")
 	http.ListenAndServe(":8080", nil)

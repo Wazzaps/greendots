@@ -1,2 +1,4 @@
+github.com/BurntSushi/toml v1.4.0 h1:kuoIxZQy2WRRk1pttg9asf+WVv6tWQuBNVmK8+nqPr0=
+github.com/BurntSushi/toml v1.4.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/andanhm/go-prettytime v1.1.0 h1:7Zr0ZiYUhV+aG7fFaVx+z/8di961R6btNyidMo9Gptw=
 github.com/andanhm/go-prettytime v1.1.0/go.mod h1:uizwLzwLZu1FTvSz8DSGkqm8Vc4edGa2VIMu16aoiZg=

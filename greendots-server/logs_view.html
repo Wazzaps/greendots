@@ -12,10 +12,21 @@
         margin: 8px;
       }
       /* Severity levels (each also defined for timestamp and logger name) */
+      .d,
       .i,
       .w,
-      .e {
+      .e,
+      .c {
         font-weight: bold;
+      }
+      .d {
+        color: #22efe1;
+      }
+      .td {
+        color: #59a0ab;
+      }
+      .ld {
+        color: #1a696d;
       }
       .i {
         color: #22ef22;
@@ -44,6 +55,15 @@
       .le {
         color: #a32929;
       }
+      .c {
+        color: #ff00bf;
+      }
+      .tc {
+        color: #b42ea2;
+      }
+      .lc {
+        color: #b30092;
+      }
 
       /* Timestamp */
       .t {
@@ -54,7 +74,7 @@
         color: #666;
       }
       /* Date has changed */
-      .d {
+      .date {
         color: #fff;
       }
     </style>

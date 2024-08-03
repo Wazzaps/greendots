@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import statusUpdateReducer from '@/controllers/statusUpdateReducer';
 import { TestDataController } from '@/controllers/TestDataController';
-import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref, h } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { debounce, throttle } from 'lodash-es';
 import makeConfetti from '@/controllers/confetti';
 
+const router = useRouter();
 const route = useRoute();
 const test_data = inject<TestDataController>('test_data')!;
 
@@ -22,6 +23,7 @@ const test_items = ref<any[]>([]);
 const test_groups = ref<any[]>([]);
 const successes_left_for_surprise = ref(0);
 let test_items_id_index: { [_: string]: number } = {};
+// Load plan and arrange into grid
 effect(async () => {
   is_plan_loading.value = true;
   const gen = ++plan_loading_generation;
@@ -112,7 +114,7 @@ effect(async () => {
 });
 
 let rerender_scheduled = false;
-function renderCanvas(time: number) {
+function renderCanvas(_time: number) {
   rerender_scheduled = false;
   if (!canvas.value) {
     return;
@@ -176,6 +178,107 @@ function renderCanvas(time: number) {
   //   // console.log('requesting animation frame');
   //   requestAnimationFrame(renderCanvas);
   // }
+}
+
+function canvasGetRelevantTest(e: MouseEvent): any {
+  const rect = canvas.value?.getBoundingClientRect();
+  if (!rect) {
+    console.error('Canvas not ready');
+    return;
+  }
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const cell_size = 22;
+  const col = Math.floor(x / cell_size);
+  const row = Math.floor(y / cell_size);
+  if (col < 0 || row < 0 || col >= cols.value.length || row >= rows.value.length) {
+    return;
+  }
+  // check if click was inside circle
+  const dx = (x % cell_size) - cell_size / 2;
+  const dy = (y % cell_size) - cell_size / 2;
+  const radius = 8;
+  const inside_circle = dx * dx + dy * dy <= radius * radius;
+
+  return [test_items.value.find((t) => t.col == col && t.row == row), inside_circle];
+}
+
+const test_item_pointer_down = ref<any | null>(null);
+const highlighted_row = ref<number | null>(null);
+const highlighted_col = ref<number | null>(null);
+const hovered_test = ref<any | null>(null);
+const popup_shown = ref(false);
+const popup_preloading = ref(false);
+const mouse_pos_x = ref(0);
+const mouse_pos_y = ref(0);
+let popup_shown_timeout: number | null = null;
+let popup_preloading_timeout: number | null = null;
+
+function handleCanvasPointerDown(e: MouseEvent) {
+  const [test, inside_circle] = canvasGetRelevantTest(e);
+  if (!test || !inside_circle) {
+    return;
+  }
+  test_item_pointer_down.value = test;
+}
+
+function handleCanvasPointerUp(e: MouseEvent) {
+  const [test, inside_circle] = canvasGetRelevantTest(e);
+  if (test && inside_circle && test_item_pointer_down.value?.id == test.id) {
+    router.push({
+      name: 'test_logs',
+      params: {
+        project: route.params.project,
+        run: route.params.run,
+        test: test.id
+      }
+    });
+  }
+  test_item_pointer_down.value = null;
+}
+
+function handleCanvasPointerMove(e: MouseEvent) {
+  const [test, inside_circle] = canvasGetRelevantTest(e);
+  if (test && inside_circle) {
+    canvas.value!.style.cursor = 'pointer';
+    if (hovered_test.value?.id != test.id) {
+      popup_shown.value = false;
+      if (popup_shown_timeout !== null) {
+        clearTimeout(popup_shown_timeout);
+      }
+      if (popup_preloading_timeout !== null) {
+        clearTimeout(popup_preloading_timeout);
+      }
+      popup_shown_timeout = setTimeout(() => {
+        popup_shown.value = true;
+      }, 500);
+      popup_preloading_timeout = setTimeout(() => {
+        popup_preloading.value = true;
+      }, 250);
+    }
+    hovered_test.value = test;
+    mouse_pos_x.value = e.clientX;
+    mouse_pos_y.value = e.clientY;
+  } else {
+    canvas.value!.style.cursor = '';
+    hovered_test.value = null;
+    mouse_pos_x.value = 0;
+    mouse_pos_y.value = 0;
+  }
+  if (test) {
+    highlighted_row.value = test.row;
+    highlighted_col.value = test.col;
+  } else {
+    highlighted_row.value = null;
+    highlighted_col.value = null;
+  }
+  test_item_pointer_down.value = null;
+}
+
+function handleCanvasPointerLeave() {
+  highlighted_row.value = null;
+  highlighted_col.value = null;
+  test_item_pointer_down.value = null;
 }
 
 function requestRenderCanvas() {
@@ -288,15 +391,17 @@ const width_resizer = makeResizer(
   (e) => e.clientX,
   () => window.innerWidth
 );
+
+const _window = window;
 </script>
 
 <template>
   <nav>
-    <span class="project-name">Project 1</span>
-    <span class="run-name">Run 1</span>
-    <span>TODO:Search</span>
+    <span class="project-name">{{ $route.params.project }}</span>
+    <span class="run-name">{{ $route.params.run }}</span>
+    <!-- <span>TODO:Search</span>
     <span>TODO:Statistics</span>
-    <span>TODO:Settings</span>
+    <span>TODO:Settings</span> -->
   </nav>
   <main
     class="results-container"
@@ -306,17 +411,31 @@ const width_resizer = makeResizer(
       '--col-count': cols.length,
       '--row-count': rows.length
     }"
+    v-if="!is_plan_loading"
   >
     <div class="legend" :style="{ 'grid-row': 1, 'grid-column': 1 }">
       <div class="legend-y">test name</div>
       <div class="legend-line"></div>
       <div class="legend-x">{{ row_params.join(' | ') }}</div>
     </div>
+    <div
+      class="row-highlight"
+      :style="{ 'grid-row': (highlighted_row || 0) + 3 }"
+      v-if="highlighted_row !== null"
+    ></div>
+    <div
+      class="col-highlight"
+      :style="{ 'grid-column': (highlighted_col || 0) + 3 }"
+      v-if="highlighted_row !== null"
+    ></div>
     <!-- TODO: maybe replace with non-range iter for key stability -->
     <span
       v-for="i in cols.length"
       :key="`chdr-${i}`"
       class="column-hdr"
+      :class="{
+        unhighlighted: highlighted_col !== null && highlighted_col !== i - 1
+      }"
       :style="{ 'grid-row': 1, 'grid-column': i + 2 }"
       v-html="format_col(cols[i - 1])"
     ></span>
@@ -324,10 +443,20 @@ const width_resizer = makeResizer(
       v-for="i in rows.length"
       :key="`rhdr-${i}`"
       class="row-hdr"
+      :class="{
+        unhighlighted: highlighted_row !== null && highlighted_row !== i - 1
+      }"
       :style="{ 'grid-row': i + 2, 'grid-column': 1 }"
       >{{ row_params.map((rp) => rows[i - 1][rp]).join(' | ') }}</span
     >
-    <canvas class="results-canvas" ref="canvas"></canvas>
+    <canvas
+      class="results-canvas"
+      ref="canvas"
+      @pointerdown="handleCanvasPointerDown"
+      @pointerup="handleCanvasPointerUp"
+      @pointermove="handleCanvasPointerMove"
+      @pointerleave="handleCanvasPointerLeave"
+    ></canvas>
     <div
       v-for="tg in test_groups"
       class="test-group"
@@ -344,6 +473,33 @@ const width_resizer = makeResizer(
     <div class="height-resizer" @pointerdown="height_resizer.begin_resize"></div>
     <div class="width-resizer" @pointerdown="width_resizer.begin_resize"></div>
   </main>
+  <main class="loading-msg" v-else>Loading...</main>
+  <div
+    class="test-hover-popup"
+    :style="{
+      top:
+        (mouse_pos_y < _window.innerHeight - 300 - 32 ? mouse_pos_y - 16 : mouse_pos_y - 300 + 32) +
+        'px',
+      left:
+        (mouse_pos_x < _window.innerWidth - 600 - 32 ? mouse_pos_x + 16 : mouse_pos_x - 600 - 16) +
+        'px'
+    }"
+    v-if="hovered_test !== null && popup_preloading"
+    v-show="hovered_test !== null && popup_shown"
+  >
+    <div>
+      <span>{{ hovered_test.id }}</span>
+      <span>
+        {{ hovered_test.status
+        }}<span v-if="hovered_test.status == 'progress'"
+          >: {{ Math.floor(hovered_test.progress * 1000) / 10 }}%</span
+        >
+      </span>
+    </div>
+    <iframe
+      :src="`/api/v1/projects/${$route.params.project}/runs/${$route.params.run}/test/${hovered_test.id}/log_tail`"
+    ></iframe>
+  </div>
 </template>
 
 <style scoped>
@@ -354,14 +510,19 @@ nav {
   right: 0;
   height: 32px;
   display: flex;
-  justify-content: space-around;
+  justify-content: start;
   gap: 1rem;
   background: #121212;
   font-size: 18px;
   z-index: 100;
+  padding: 0 32px;
 }
 nav a {
   color: #aeaeae;
+}
+.loading-msg {
+  padding: 48px 32px 32px;
+  font-size: 2rem;
 }
 .results-container {
   display: grid;
@@ -374,6 +535,19 @@ nav a {
   grid-column: 3 / span calc(var(--col-count) + 2);
   width: calc(var(--col-count) * 22px);
   height: calc(var(--row-count) * 22px);
+}
+.row-highlight,
+.col-highlight {
+  background: #413f4a;
+}
+.row-highlight {
+  grid-column: 1 / calc(var(--col-count) + 3);
+}
+.col-highlight {
+  grid-row: 2 / calc(var(--row-count) + 3);
+}
+.unhighlighted {
+  color: #888;
 }
 .column-hdr {
   transform: rotate(-40deg) translateX(-5px) translateY(5px);
@@ -402,6 +576,23 @@ nav a {
 }
 .legend-y {
   text-align: right;
+}
+.test-hover-popup {
+  position: fixed;
+  pointer-events: none;
+  user-select: none;
+  background: #111;
+  border-radius: 8px;
+}
+.test-hover-popup > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+.test-hover-popup > iframe {
+  width: 600px;
+  height: 250px;
+  border: none;
 }
 .height-resizer {
   background: rgba(255, 255, 255, 0);
