@@ -248,7 +248,7 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(workers_to_check) == 0 {
-			time.Sleep(1 * time.Second)
+			time.Sleep(1000 * time.Millisecond)
 			continue
 		} else {
 			err := json.NewEncoder(w).Encode(statusPollResponse{WorkersToCheck: workers_to_check})
@@ -266,7 +266,8 @@ func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	project := r.PathValue("project")
 	run := r.PathValue("run")
-	statusStreamPath := filepath.Join(projectsDir, project, run, "status.0.jsonl")
+	worker_id := r.PathValue("worker_id")
+	statusStreamPath := filepath.Join(projectsDir, project, run, fmt.Sprintf("status.%s.jsonl", worker_id))
 	http.ServeFile(w, r, statusStreamPath)
 }
 

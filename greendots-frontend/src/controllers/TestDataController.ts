@@ -125,9 +125,11 @@ export class TestDataController {
     if (!res.ok) {
       throw new Error('Failed to fetch test status chunk');
     }
-    const start_offset = parseInt(res.headers.get('Content-Range')!.split(' ')[1].split('-')[0]);
-    if (start_offset !== offset) {
-      throw new Error('Misbehaving server');
+    if (offset > 0) {
+      const start_offset = parseInt(res.headers.get('Content-Range')!.split(' ')[1].split('-')[0]);
+      if (start_offset !== offset) {
+        throw new Error('Misbehaving server');
+      }
     }
     return new Uint8Array(await res.arrayBuffer());
   }
@@ -145,8 +147,12 @@ export class TestDataController {
 
         callback(chunk.value);
       }
+      callback([{ type: 'summary_done' }]);
       if (!headers) throw new Error('No headers');
-      const offsets = headers.get('x-end-offset')!.split(',').map(parseInt);
+      const offsets = headers
+        .get('x-end-offset')!
+        .split(',')
+        .map((it) => parseInt(it));
 
       const buffers = offsets.map(() => new Uint8Array(0));
       while (true) {

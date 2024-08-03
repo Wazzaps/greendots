@@ -1,31 +1,35 @@
 <script setup lang="ts">
 import statusUpdateReducer from '@/controllers/statusUpdateReducer';
 import { TestDataController } from '@/controllers/TestDataController';
-import { ref, effect, inject, onUnmounted } from 'vue';
+import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref } from 'vue';
 import { useRoute } from 'vue-router';
+import { debounce, throttle } from 'lodash-es';
+import makeConfetti from '@/controllers/confetti';
 
 const route = useRoute();
 const test_data = inject<TestDataController>('test_data')!;
 
 const is_plan_loading = ref(true);
-let plan_loading_gen = 0; // used to resolve parallel request issues
+let plan_loading_generation = 0; // used to resolve parallel request issues
 
+const canvas = ref<HTMLCanvasElement | null>(null);
 const x_height = ref(150);
-const y_width = ref(250);
+const y_width = ref(150);
 const row_params = ref<string[]>([]);
 const rows = ref<any[]>([]);
 const cols = ref<any[]>([]);
 const test_items = ref<any[]>([]);
 const test_groups = ref<any[]>([]);
+const successes_left_for_surprise = ref(0);
 let test_items_id_index: { [_: string]: number } = {};
 effect(async () => {
   is_plan_loading.value = true;
-  const gen = ++plan_loading_gen;
+  const gen = ++plan_loading_generation;
   const plan = await test_data.getTestRunPlan(
     route.params.project as string,
     route.params.run as string
   );
-  if (gen != plan_loading_gen) {
+  if (gen != plan_loading_generation) {
     return;
   }
 
@@ -107,18 +111,99 @@ effect(async () => {
   is_plan_loading.value = false;
 });
 
+let rerender_scheduled = false;
+function renderCanvas(time: number) {
+  rerender_scheduled = false;
+  if (!canvas.value) {
+    return;
+  }
+  const ctx: CanvasRenderingContext2D = canvas.value.getContext('2d')!;
+  const cell_size = 22;
+  const cell_radius = 8;
+  const cell_progress_width = 2;
+  const cell_colors = {
+    success: '#90db8a',
+    fail: '#e34b3b',
+    skip: '#ffee51',
+    pending: '#3f3f3f',
+    progress: '#4d472d',
+    progress_stroke: '#aa9f6e'
+  };
+
+  // Resize canvas if needed
+  const [canvas_width, canvas_height] = [canvas.value.width, canvas.value.height];
+  const [requested_width, requested_height] = [
+    cols.value.length * cell_size,
+    rows.value.length * cell_size
+  ];
+  if (canvas_width != requested_width || canvas_height != requested_height) {
+    canvas.value.width = requested_width;
+    canvas.value.height = requested_height;
+  } else {
+    ctx.clearRect(0, 0, canvas_width, canvas_height);
+  }
+
+  // Draw each test
+  for (const test of test_items.value) {
+    const x = (test.col + 0.5) * cell_size;
+    const y = (test.row + 0.5) * cell_size;
+    const color = cell_colors[test.status] || cell_colors['pending'];
+    ctx.fillStyle = color;
+
+    ctx.beginPath();
+    ctx.arc(x, y, cell_radius, 0, 2 * Math.PI);
+    ctx.fill();
+    if (test.status == 'progress') {
+      ctx.strokeStyle = cell_colors.progress_stroke;
+      ctx.fillStyle = cell_colors.progress_stroke;
+      ctx.lineWidth = cell_progress_width;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y - cell_radius);
+      ctx.arc(x, y, cell_radius, -0.5 * Math.PI, (1.5 - 2 * test.progress) * Math.PI, true);
+      ctx.lineTo(x, y);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(x, y, cell_radius - cell_progress_width / 2, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+  }
+
+  // TODO: Animate progress and status changes
+  // if (true) {
+  //   rerender_scheduled = true;
+  //   // console.log('requesting animation frame');
+  //   requestAnimationFrame(renderCanvas);
+  // }
+}
+
+function requestRenderCanvas() {
+  if (!rerender_scheduled) {
+    rerender_scheduled = true;
+    requestAnimationFrame(renderCanvas);
+  }
+}
+
+watch([test_items, canvas, cols, rows], debounce(requestRenderCanvas, 100, { maxWait: 250 }), {
+  deep: true
+});
+
 let updates_unsub: (() => void) | null = null;
 effect(() => {
   if (is_plan_loading.value) {
     return;
   }
+  successes_left_for_surprise.value = 0;
   updates_unsub?.();
 
   const callback = (chunk: any[]) => {
     for (const status_update of chunk) {
       const test_idx = test_items_id_index[status_update.test];
-      // console.log('status_update', test_idx, status_update, test_items.value[test_idx]);
-      statusUpdateReducer(status_update, test_items, test_idx);
+      statusUpdateReducer(status_update, test_items, test_idx, successes_left_for_surprise, () => {
+        console.log('All tests passed, confetti time!');
+        makeConfetti();
+      });
     }
   };
   updates_unsub = test_data.subscribeTestStatusUpdates(
@@ -145,6 +230,64 @@ function format_col(col: any) {
     })
     .join(' ');
 }
+
+let user_select_sem = 0;
+function makeResizer(
+  distance_ref: Ref<number>,
+  axis_extractor: (e: PointerEvent) => number,
+  window_size_axis: () => number
+) {
+  let is_resizing = false;
+  let resize_offset = 0;
+  const resize = throttle((e: PointerEvent) => {
+    distance_ref.value = Math.floor(
+      Math.max(70, Math.min(window_size_axis() * 0.8, axis_extractor(e) + resize_offset))
+    );
+  }, 10);
+  function begin_resize(e: PointerEvent) {
+    if (is_resizing) {
+      return;
+    }
+    const start_mouse = axis_extractor(e);
+    const start_target = distance_ref.value;
+    resize_offset = start_target - start_mouse;
+    document.addEventListener('pointermove', resize);
+    user_select_sem += 1;
+    if (user_select_sem == 1) {
+      document.body.style.userSelect = 'none';
+    }
+    is_resizing = true;
+  }
+  function end_resize() {
+    if (!is_resizing) {
+      return;
+    }
+    document.removeEventListener('pointermove', resize);
+    user_select_sem -= 1;
+    if (user_select_sem == 0) {
+      document.body.style.userSelect = '';
+    }
+    is_resizing = false;
+  }
+  onMounted(() => {
+    window.addEventListener('pointerup', end_resize);
+  });
+  onUnmounted(() => {
+    window.removeEventListener('pointerup', end_resize);
+  });
+
+  return { begin_resize };
+}
+const height_resizer = makeResizer(
+  x_height,
+  (e) => e.clientY,
+  () => window.innerHeight
+);
+const width_resizer = makeResizer(
+  y_width,
+  (e) => e.clientX,
+  () => window.innerWidth
+);
 </script>
 
 <template>
@@ -184,23 +327,7 @@ function format_col(col: any) {
       :style="{ 'grid-row': i + 2, 'grid-column': 1 }"
       >{{ row_params.map((rp) => rows[i - 1][rp]).join(' | ') }}</span
     >
-    <div
-      v-for="test in test_items"
-      :title="`id: ${test.id}\ngroup: ${test.grp}\nstatus: ${test.status}`"
-      :key="`tst-${test.id}`"
-      :class="['test-item', 'test-' + test.status]"
-      :style="{
-        'grid-row': test.row + 3,
-        'grid-column': test.col + 3,
-        '--percent-left': (1 - test.progress) * 100
-      }"
-      @click="
-        $router.push({
-          name: 'test_logs',
-          params: { project: $route.params.project, run: $route.params.run, test: test.id }
-        })
-      "
-    ></div>
+    <canvas class="results-canvas" ref="canvas"></canvas>
     <div
       v-for="tg in test_groups"
       class="test-group"
@@ -214,8 +341,8 @@ function format_col(col: any) {
       <span>{{ tg.name }}</span>
       <div class="test-group-spacer"></div>
     </div>
-    <div class="height-resizer"></div>
-    <div class="width-resizer"></div>
+    <div class="height-resizer" @pointerdown="height_resizer.begin_resize"></div>
+    <div class="width-resizer" @pointerdown="width_resizer.begin_resize"></div>
   </main>
 </template>
 
@@ -241,6 +368,12 @@ nav a {
   grid-template-columns: var(--y-width) 6px repeat(var(--col-count), 22px);
   grid-template-rows: var(--x-height) 16px repeat(var(--row-count), 22px);
   padding: 32px 16px 16px;
+}
+.results-canvas {
+  grid-row: 3 / span calc(var(--row-count) + 2);
+  grid-column: 3 / span calc(var(--col-count) + 2);
+  width: calc(var(--col-count) * 22px);
+  height: calc(var(--row-count) * 22px);
 }
 .column-hdr {
   transform: rotate(-40deg) translateX(-5px) translateY(5px);
@@ -301,53 +434,9 @@ nav a {
   background: #aaa;
   margin: 3px;
 }
-@property --percent-left {
-  syntax: '<number>';
-  inherits: false;
-  initial-value: 0;
-}
-.test-item {
-  border-radius: 100%;
-  margin: 3px;
-  --percent-left: 0;
-  transition:
-    background 0.2s,
-    --percent-left 0.2s,
-    border 0.2s;
-  cursor: pointer;
-}
-.test-success {
-  background: #90db8a;
-  border: 2px solid #90db8a;
-  /* background: #0b6e4f; */
-}
-.test-fail {
-  background: #e34b3b;
-  border: 2px solid #e34b3b;
-}
-.test-skip {
-  background: #ffee51;
-  border: 2px solid #ffee51;
-}
-.test-pending {
-  /* background: #767676;
-  outline: 4px solid #4d4d4d;
-  margin: 7px; */
-  background: #3f3f3f;
-  border: 2px solid #3f3f3f;
-}
-.test-progress {
-  border: 2px solid #aa9f6e;
-  background: conic-gradient(
-      #4d472d 0% 0%,
-      #4d472d 0% calc(var(--percent-left) * 1%),
-      #aa9f6e calc(var(--percent-left) * 1%) 100%,
-      #aa9f6e 100% 100%
-    ),
-    #aa9f6e;
-}
 </style>
 <style>
+/* This is created dynamically, so it can't use a scoped style */
 .col-hdr-lbl {
   color: #999;
   font-size: 11px;
