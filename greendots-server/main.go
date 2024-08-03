@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/andanhm/go-prettytime"
@@ -18,6 +20,12 @@ import (
 
 //go:embed api-docs.txt
 var apiDocs []byte
+
+//go:generate ./gen_logs_view.sh
+//go:embed logs_view.min.html
+var logsViewPrefix []byte
+
+// -- Types --
 
 type projectsList struct {
 	Projects []project `json:"projects"`
@@ -52,12 +60,16 @@ type statusPollResponse struct {
 	WorkersToCheck []int `json:"workers_to_check"`
 }
 
+type logLine struct {
+	Level   string  `json:"level"`
+	Message string  `json:"message"`
+	Name    string  `json:"name"`
+	Time    float64 `json:"time"`
+}
+
 var projectsDir string
 
-func docsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	w.Write(apiDocs)
-}
+// -- Helpers --
 
 func getProjectRuns(project string) ([]run, error) {
 	projectPath := filepath.Join(projectsDir, project)
@@ -91,6 +103,32 @@ func getProjectRuns(project string) ([]run, error) {
 	})
 
 	return runs, nil
+}
+
+func fullWriteBytes(w http.ResponseWriter, data []byte) error {
+	for len(data) > 0 {
+		written, err := w.Write(data)
+		if err != nil {
+			return err
+		}
+		data = data[written:]
+	}
+	return nil
+}
+
+func fullWrite(w http.ResponseWriter, data string) error {
+	return fullWriteBytes(w, []byte(data))
+}
+
+func isDirTraversal(path string) bool {
+	return path[:1] == "."
+}
+
+// -- Handlers --
+
+func docsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.Write(apiDocs)
 }
 
 func projectsListHandler(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +169,10 @@ func projectRunsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	project := r.PathValue("project")
+	if isDirTraversal(project) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
 
 	runs, err := getProjectRuns(project)
 	if err != nil {
@@ -150,6 +192,10 @@ func runPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	project := r.PathValue("project")
 	run := r.PathValue("run")
+	if isDirTraversal(project) || isDirTraversal(run) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
 	planPath := filepath.Join(projectsDir, project, run, "plan.json")
 	http.ServeFile(w, r, planPath)
 }
@@ -160,6 +206,11 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	// Read plan file to get worker count
 	project := r.PathValue("project")
 	run := r.PathValue("run")
+	if isDirTraversal(project) || isDirTraversal(run) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+
 	planPath := filepath.Join(projectsDir, project, run, "plan.json")
 	planFd, err := os.Open(planPath)
 	if err != nil {
@@ -233,6 +284,10 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 
 	project := r.PathValue("project")
 	run := r.PathValue("run")
+	if isDirTraversal(project) || isDirTraversal(run) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
 
 	for {
 		workers_to_check := []int{}
@@ -267,8 +322,216 @@ func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 	project := r.PathValue("project")
 	run := r.PathValue("run")
 	worker_id := r.PathValue("worker_id")
+	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(worker_id) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
 	statusStreamPath := filepath.Join(projectsDir, project, run, fmt.Sprintf("status.%s.jsonl", worker_id))
 	http.ServeFile(w, r, statusStreamPath)
+}
+
+func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) string {
+	html_lines := ""
+	var log_line logLine
+	err := json.Unmarshal(json_line, &log_line)
+	if err != nil {
+		log_line = logLine{
+			Level:   "INFO",
+			Message: string(json_line),
+			Name:    "unknown",
+			Time:    *last_time,
+		}
+	}
+	*last_time = log_line.Time
+
+	var severity string
+	var severity_class string
+	switch log_line.Level {
+	case "INFO":
+		severity = "<span class=i>I</span>"
+		severity_class = "i"
+	case "WARN":
+		severity = "<span class=w>W</span>"
+		severity_class = "w"
+	case "WARNING":
+		severity = "<span class=w>W</span>"
+		severity_class = "w"
+	case "ERROR":
+		severity = "<span class=e>E</span>"
+		severity_class = "e"
+	default:
+		severity = fmt.Sprintf("<span class=i>%s</span>", log_line.Level)
+		severity_class = "i"
+	}
+	ts := time.Unix(int64(log_line.Time), int64((log_line.Time-float64(int(log_line.Time)))*1e9))
+	date := ts.Format("2006-01-02")
+	if date != *last_date {
+		html_lines += fmt.Sprintf("<span class=d>------- %s -------</span>\n", date)
+		*last_date = date
+	}
+
+	html_lines += fmt.Sprintf(
+		"<span class=t%s>%s </span>%s <span class=l%s>%s</span> %s\n",
+		severity_class, ts.Format("15:04:05"), severity, severity_class, log_line.Name, log_line.Message,
+	)
+
+	return html_lines
+}
+
+func logStreamHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	no_truncate := r.URL.Query().Has("notrunc")
+
+	// Open logfile
+	project := r.PathValue("project")
+	run := r.PathValue("run")
+	test := r.PathValue("test")
+	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	log_path := filepath.Join(projectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+	log_fd, err := os.Open(log_path)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	defer log_fd.Close()
+
+	// Send wrapper HTML
+	err = fullWriteBytes(w, logsViewPrefix)
+	if err != nil {
+		return
+	}
+
+	err = fullWrite(w, "-- LOG START --\n")
+	if err != nil {
+		return
+	}
+
+	// Read the log file, and keep trying on EOF
+	chunk_pipe_rd, chunk_pipe_wr := io.Pipe()
+	go func() {
+		chunk := make([]byte, 1024)
+		for {
+			n, err := log_fd.Read(chunk)
+			if err != nil && err != io.EOF {
+				chunk_pipe_wr.CloseWithError(err)
+				break
+			}
+			if n == 0 || err == io.EOF {
+				// Reached EOF, wait a bit before trying again
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			_, err = chunk_pipe_wr.Write(chunk[:n])
+			if err != nil {
+				log.Println("write error:", err)
+				break
+			}
+		}
+	}()
+
+	// Flusher goroutine
+	done := atomic.Bool{}
+	defer done.Store(true)
+	go func() {
+		for !done.Load() {
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
+
+	// Go over the log file and format it to html
+	scanner := bufio.NewScanner(chunk_pipe_rd)
+	byte_counter := 0
+	last_date := ""
+	last_time := 0.0
+	for scanner.Scan() {
+		json_line := scanner.Bytes()
+		if len(json_line) == 0 {
+			continue
+		}
+
+		html_lines := formatJsonLogLine(json_line, &last_date, &last_time)
+		byte_counter += len(html_lines)
+		if !no_truncate && byte_counter > 1024*1024 {
+			err := fullWrite(w, "-- LOG TRUNCATED DUE TO LENGTH, <a href=log_stream?notrunc>Click here to keep going</a> --\n")
+			if err != nil {
+				return
+			}
+			break
+		}
+		err = fullWrite(w, html_lines)
+		if err != nil {
+			return
+		}
+	}
+}
+
+func logTailHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+
+	// Get line count from query
+	line_count := 5
+	if r.URL.Query().Get("lines") != "" {
+		_, err := fmt.Sscanf(r.URL.Query().Get("lines"), "%d", &line_count)
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Open logfile
+	project := r.PathValue("project")
+	run := r.PathValue("run")
+	test := r.PathValue("test")
+	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	log_path := filepath.Join(projectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+	log_fd, err := os.Open(log_path)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	defer log_fd.Close()
+
+	// Send wrapper HTML
+	err = fullWriteBytes(w, logsViewPrefix)
+	if err != nil {
+		return
+	}
+
+	lines := []string{"-- LOG START --\n"}
+
+	// Go over the log file and format it to html
+	scanner := bufio.NewScanner(log_fd)
+	last_date := ""
+	last_time := 0.0
+	for scanner.Scan() {
+		json_line := scanner.Bytes()
+		if len(json_line) == 0 {
+			continue
+		}
+
+		html_lines := formatJsonLogLine(json_line, &last_date, &last_time)
+		// Append to lines, but keep only the last N lines
+		lines_start := min(len(lines), max(0, len(lines)-line_count+1))
+		lines = append(lines[lines_start:], html_lines)
+	}
+
+	// Write the last lines
+	for _, line := range lines {
+		err = fullWrite(w, line)
+		if err != nil {
+			return
+		}
+	}
 }
 
 func NotFoundHandler(w http.ResponseWriter, r *http.Request) {
@@ -287,6 +550,8 @@ func main() {
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", runStatusSummaryHandler)
 	http.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", runStatusPollHandler)
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", runStatusStreamHandler)
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", logStreamHandler)
+	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", logTailHandler)
 	// TODO: http.HandleFunc("PUT /api/v1/projects/{project}/runs/{run}/test/{test}/status", todo)
 	http.HandleFunc("/", NotFoundHandler)
 	log.Println("Listening on :8080")

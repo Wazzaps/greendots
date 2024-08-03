@@ -1,0 +1,110 @@
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      :root {
+        font-family: monospace;
+        background: #222;
+        color: #ddd;
+        color-scheme: dark;
+      }
+      body {
+        margin: 8px;
+      }
+      /* Severity levels (each also defined for timestamp and logger name) */
+      .i,
+      .w,
+      .e {
+        font-weight: bold;
+      }
+      .i {
+        color: #22ef22;
+      }
+      .ti {
+        color: #578a66;
+      }
+      .li {
+        color: #386734;
+      }
+      .w {
+        color: #ffff00;
+      }
+      .tw {
+        color: #8e8851;
+      }
+      .lw {
+        color: #7f6b3b;
+      }
+      .e {
+        color: #ee3310;
+      }
+      .te {
+        color: #9b6565;
+      }
+      .le {
+        color: #a32929;
+      }
+
+      /* Timestamp */
+      .t {
+        color: #999;
+      }
+      /* Logger name */
+      .l {
+        color: #666;
+      }
+      /* Date has changed */
+      .d {
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      window.scroll_to_bottom = true;
+      let autoscrolling = false;
+      let size_queue = [];
+      document.addEventListener("scroll", function () {
+        if (!autoscrolling) {
+          if (
+            window.scrollY + window.innerHeight >=
+            (size_queue[0] || 0) - 30
+          ) {
+            window.scroll_to_bottom = true;
+          } else {
+            window.scroll_to_bottom = false;
+          }
+        }
+      });
+
+      document.addEventListener("scrollend", function () {
+        autoscrolling = false;
+      });
+
+      if (location.pathname.endsWith("log_stream")) {
+        document.addEventListener("readystatechange", function () {
+          if (document.readyState == "complete") {
+            document
+              .querySelector("pre")
+              .appendChild(
+                document.createTextNode("\n-- LOG STREAM INTERRUPTED --\n")
+              );
+          }
+        });
+      }
+
+      setInterval(() => {
+        size_queue.push(document.body.scrollHeight);
+        if (size_queue.length > 2) {
+          size_queue.shift();
+        }
+        if (window.scroll_to_bottom) {
+          autoscrolling = true;
+          window.scrollTo(0, document.body.scrollHeight);
+        }
+      }, 100);
+    </script>
+    <!-- This must be the last element and empty -->
+    <pre></pre>
+  </body>
+</html>

@@ -1,5 +1,3 @@
-<script setup lang="ts"></script>
-
 <template>
   <nav>
     <span class="project-name">Project 1</span>
@@ -8,7 +6,10 @@
     <span>TODO:Statistics</span>
     <span>TODO:Settings</span>
   </nav>
-  <main class="logs-container">Some logs</main>
+  <iframe
+    class="logs"
+    :src="`/api/v1/projects/${$route.params.project}/runs/${$route.params.run}/test/${$route.params.test}/log_stream`"
+  ></iframe>
 </template>
 
 <style scoped>
@@ -28,10 +29,14 @@ nav {
 nav a {
   color: #aeaeae;
 }
-main {
-  margin-top: 32px;
-  padding: 8px;
-  white-space: pre-wrap;
-  font-family: monospace;
+.logs {
+  position: fixed;
+  top: 32px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: calc(100% - 32px);
+  border: none;
 }
 </style>
