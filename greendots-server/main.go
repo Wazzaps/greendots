@@ -24,7 +24,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.1.0"
+const VERSION = "0.2.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
