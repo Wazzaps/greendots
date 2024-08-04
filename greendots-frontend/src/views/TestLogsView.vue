@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 const iframe = ref<HTMLIFrameElement | null>(null);
+const router = useRouter();
 function toggleStatus(e: Event, level: string) {
   if (!iframe.value) {
     return;
@@ -17,6 +19,19 @@ function toggleStatus(e: Event, level: string) {
     }
   }
 }
+
+function keydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    router.back();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', keydown);
+});
+onUnmounted(() => {
+  document.removeEventListener('keydown', keydown);
+});
 </script>
 
 <template>
