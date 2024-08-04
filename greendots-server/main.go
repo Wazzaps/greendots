@@ -688,7 +688,6 @@ func main() {
 
 	http.HandleFunc("GET /favicon.ico", nocache(serveIconHandler))
 
-	http.HandleFunc("GET /api/{$}", docsHandler)
 	http.HandleFunc("GET /api/v1/config", nocache(configHandler))
 	http.HandleFunc("GET /api/v1/version", nocache(versionHandler))
 	http.HandleFunc("GET /api/v1/projects", nocache(projectsListHandler))
@@ -699,6 +698,7 @@ func main() {
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", nocache(runStatusStreamHandler))
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", nocache(logStreamHandler))
 	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", nocache(logTailHandler))
+	http.HandleFunc("GET /api/", docsHandler)
 
 	// TODO: use etag caching instead of nocache
 	// the assets doesn't need nocache nor etag since it has hashes in the name

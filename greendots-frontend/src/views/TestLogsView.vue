@@ -1,10 +1,11 @@
 <template>
   <nav>
-    <span class="project-name">Project 1</span>
-    <span class="run-name">Run 1</span>
-    <span>TODO:Search</span>
+    <span class="project-name">{{ $route.params.project }}</span>
+    <span class="run-name">{{ $route.params.run }}</span>
+    <span class="test-name">{{ $route.params.test }}</span>
+    <!-- <span>TODO:Search</span>
     <span>TODO:Statistics</span>
-    <span>TODO:Settings</span>
+    <span>TODO:Settings</span> -->
   </nav>
   <iframe
     class="logs"
@@ -20,11 +21,12 @@ nav {
   right: 0;
   height: 32px;
   display: flex;
-  justify-content: space-around;
+  justify-content: start;
   gap: 1rem;
   background: #121212;
   font-size: 18px;
   z-index: 100;
+  padding: 0 32px;
 }
 nav a {
   color: #aeaeae;

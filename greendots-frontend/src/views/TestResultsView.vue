@@ -251,10 +251,10 @@ function handleCanvasPointerMove(e: MouseEvent) {
       }
       popup_shown_timeout = setTimeout(() => {
         popup_shown.value = true;
-      }, 500);
+      }, 350);
       popup_preloading_timeout = setTimeout(() => {
         popup_preloading.value = true;
-      }, 250);
+      }, 150);
     }
     hovered_test.value = test;
     mouse_pos_x.value = e.clientX;
@@ -279,6 +279,14 @@ function handleCanvasPointerLeave() {
   highlighted_row.value = null;
   highlighted_col.value = null;
   test_item_pointer_down.value = null;
+  if (popup_shown_timeout !== null) {
+    clearTimeout(popup_shown_timeout);
+  }
+  if (popup_preloading_timeout !== null) {
+    clearTimeout(popup_preloading_timeout);
+  }
+  popup_shown.value = false;
+  popup_preloading.value = false;
 }
 
 function requestRenderCanvas() {

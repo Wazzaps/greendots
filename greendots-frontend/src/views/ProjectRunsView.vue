@@ -4,8 +4,8 @@ import ProjectRuns from '@/components/ProjectRuns.vue';
 
 <template>
   <nav>
-    <span class="project-name">Project 1</span>
-    <span>TODO:Settings</span>
+    <span class="project-name">{{ $route.params.project }}</span>
+    <!-- <span>TODO:Settings</span> -->
   </nav>
   <Suspense>
     <ProjectRuns class="project-runs-container" />
@@ -23,11 +23,12 @@ nav {
   right: 0;
   height: 32px;
   display: flex;
-  justify-content: space-around;
+  justify-content: start;
   gap: 1rem;
   background: #121212;
   font-size: 18px;
   z-index: 100;
+  padding: 0 32px;
 }
 nav a {
   color: #aeaeae;
