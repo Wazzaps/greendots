@@ -254,7 +254,7 @@ class LivelogPlugin:
         plan = {
             "worker_count": self._worker_count,
             "groups": groups,
-            "row_params": list(row_params),
+            "row_params": [] if row_params is None else list(row_params),
         }
 
         # write the plan to a file
