@@ -1,15 +1,56 @@
+<script setup lang="ts">
+import { ref } from 'vue';
+
+const iframe = ref<HTMLIFrameElement | null>(null);
+function toggleStatus(e: Event, level: string) {
+  if (!iframe.value) {
+    return;
+  }
+  const checked = (e.target! as HTMLInputElement).checked;
+  const className = 'hide-' + level;
+  const body = iframe.value.contentWindow?.document.body;
+  if (body) {
+    if (checked) {
+      body.classList.remove(className);
+    } else {
+      body.classList.add(className);
+    }
+  }
+}
+</script>
+
 <template>
   <nav>
     <span class="project-name">{{ $route.params.project }}</span>
     <span class="run-name">{{ $route.params.run }}</span>
     <span class="test-name">{{ $route.params.test }}</span>
+    <div class="spacer"></div>
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'd')" />Debug</label
+    >
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'i')" />Info</label
+    >
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'w')" />Warn</label
+    >
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'e')" />Error</label
+    >
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'c')" />Critical</label
+    >
+    <label class="level-toggle"
+      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 't')" />Timestamps</label
+    >
     <!-- <span>TODO:Search</span>
     <span>TODO:Statistics</span>
     <span>TODO:Settings</span> -->
   </nav>
   <iframe
     class="logs"
-    :src="`/api/v1/projects/${$route.params.project}/runs/${$route.params.run}/test/${$route.params.test}/log_stream`"
+    ref="iframe"
+    :src="`/api/v1/projects/${encodeURIComponent($route.params.project)}/runs/${encodeURIComponent($route.params.run)}/test/${encodeURIComponent($route.params.test)}/log_stream`"
   ></iframe>
 </template>
 
@@ -27,6 +68,13 @@ nav {
   font-size: 18px;
   z-index: 100;
   padding: 0 32px;
+}
+.spacer {
+  flex-grow: 1;
+}
+.level-toggle {
+  display: flex;
+  gap: 6px;
 }
 nav a {
   color: #aeaeae;

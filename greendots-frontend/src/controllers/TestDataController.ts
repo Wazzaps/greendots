@@ -98,17 +98,22 @@ export class TestDataController {
 
   @memoPromise(500)
   async getProjectRuns(project: string) {
-    return (await fetchObject(`/api/v1/projects/${project}/runs`, 'project runs')).runs;
+    return (
+      await fetchObject(`/api/v1/projects/${encodeURIComponent(project)}/runs`, 'project runs')
+    ).runs;
   }
 
   @memoPromise(10000)
   async getTestRunPlan(project: string, run: string): Promise<RunPlan> {
-    return await fetchObject(`/api/v1/projects/${project}/runs/${run}/plan`, 'test run plan');
+    return await fetchObject(
+      `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/plan`,
+      'test run plan'
+    );
   }
 
   getTestStatusSummary(project: string, run: string) {
     return fetchObjects(
-      `/api/v1/projects/${project}/runs/${run}/status_summary`,
+      `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_summary`,
       'test run status summary'
     );
   }
@@ -119,9 +124,12 @@ export class TestDataController {
     worker_id: string,
     offset: number
   ): Promise<Uint8Array> {
-    const res = await fetch(`/api/v1/projects/${project}/runs/${run}/status_stream/${worker_id}`, {
-      headers: { Range: `bytes=${offset}-` }
-    });
+    const res = await fetch(
+      `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_stream/${encodeURIComponent(worker_id)}`,
+      {
+        headers: { Range: `bytes=${offset}-` }
+      }
+    );
     if (!res.ok) {
       throw new Error('Failed to fetch test status chunk');
     }
@@ -158,7 +166,7 @@ export class TestDataController {
       while (true) {
         // Wait for updated status files
         const res = await fetchObject(
-          `/api/v1/projects/${project}/runs/${run}/status_poll`,
+          `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_poll`,
           'test status size updates',
           { body: JSON.stringify(offsets), method: 'POST' }
         );

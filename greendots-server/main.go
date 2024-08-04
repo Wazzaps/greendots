@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -58,9 +59,9 @@ type runPlan struct {
 }
 
 type runPlanTestItem struct {
-	Id     string            `json:"id"`
-	Name   string            `json:"name"`
-	Params map[string]string `json:"params"`
+	Id     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Params map[string]interface{} `json:"params"`
 }
 
 type statusPollResponse struct {
@@ -305,6 +306,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	var plan runPlan
 	err = json.NewDecoder(planFd).Decode(&plan)
 	if err != nil {
+		log.Printf("Failed to decode plan file '%s': %v", planPath, err)
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
@@ -460,13 +462,13 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 	ts := time.Unix(int64(log_line.Time), int64((log_line.Time-float64(int(log_line.Time)))*1e9))
 	date := ts.Format("2006-01-02")
 	if date != *last_date {
-		html_lines += fmt.Sprintf("<span class=date>------- %s -------</span>\n", date)
+		html_lines += fmt.Sprintf("<span class=date>------- %s -------\n</span>", date)
 		*last_date = date
 	}
 
 	html_lines += fmt.Sprintf(
-		"<span class=t%s>%s </span>%s <span class=l%s>%s</span> %s\n",
-		severity_class, ts.Format("15:04:05"), severity, severity_class, log_line.Name, log_line.Message,
+		"<span class=%s><span class=t>%s </span><span class=s>%s </span><span class=l>%s</span> %s\n</span>",
+		severity_class, ts.Format("15:04:05"), severity, log_line.Name, log_line.Message,
 	)
 
 	return html_lines
@@ -480,7 +482,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 	// Open logfile
 	project := r.PathValue("project")
 	run := r.PathValue("run")
-	test := r.PathValue("test")
+	test := strings.ReplaceAll(r.PathValue("test"), "/", "_")
 	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
@@ -582,7 +584,7 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	// Open logfile
 	project := r.PathValue("project")
 	run := r.PathValue("run")
-	test := r.PathValue("test")
+	test := strings.ReplaceAll(r.PathValue("test"), "/", "_")
 	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
