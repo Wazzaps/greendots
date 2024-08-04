@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -642,16 +643,16 @@ func configHandler(w http.ResponseWriter, r *http.Request) {
 var dist embed.FS
 
 func serveFrontendHandler(w http.ResponseWriter, r *http.Request) {
-	http.ServeFileFS(w, r, dist, "frontend-dist/index.html")
+	if r.Method == "GET" || r.Method == "HEAD" {
+		http.ServeFileFS(w, r, dist, "frontend-dist/index.html")
+	} else {
+		log.Printf("%s %s: not found", r.Method, r.URL.Path)
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
 }
 
 func serveIconHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFileFS(w, r, dist, "frontend-dist/favicon.ico")
-}
-
-func NotFoundHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s %s: not found", r.Method, r.URL.Path)
-	http.Error(w, "Not found", http.StatusNotFound)
 }
 
 func nocache(handler func(w http.ResponseWriter, r *http.Request)) func(w http.ResponseWriter, r *http.Request) {
@@ -703,8 +704,10 @@ func main() {
 	// TODO: use etag caching instead of nocache
 	// the assets doesn't need nocache nor etag since it has hashes in the name
 	// of the files so it handles it on its own
-	http.HandleFunc("GET /", nocache(serveFrontendHandler))
-	http.HandleFunc("/", NotFoundHandler)
+	http.HandleFunc("/", nocache(serveFrontendHandler))
 	log.Println("Listening on :8080")
-	http.ListenAndServe(":8080", nil)
+	err = http.ListenAndServe(":8080", nil)
+	if err != nil {
+		log.Fatalf("failed to start server: %v", err)
+	}
 }

@@ -11,6 +11,7 @@ const docs_url = ref('/api/v1/');
   <nav>
     <a :href="docs_url">Docs</a>
     <a href="/api/v1/config">Config</a>
+    <a href="/api/v1/version">Build info</a>
     <!-- <a :href="source_code_url">Source code</a> -->
   </nav>
   <Suspense>
