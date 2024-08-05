@@ -508,6 +508,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Read the log file, and keep trying on EOF
 	chunk_pipe_rd, chunk_pipe_wr := io.Pipe()
+	defer chunk_pipe_rd.Close()
 	go func() {
 		chunk := make([]byte, config.StatusStream.ChunkSize)
 		for {
@@ -542,27 +543,46 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Go over the log file and format it to html
-	scanner := bufio.NewScanner(chunk_pipe_rd)
+	line_chan := make(chan []byte)
+
+	go func() {
+		scanner := bufio.NewScanner(chunk_pipe_rd)
+		for scanner.Scan() {
+			json_line := scanner.Bytes()
+			if len(json_line) == 0 {
+				continue
+			}
+
+			line_chan <- json_line
+		}
+		close(line_chan)
+	}()
+
 	byte_counter := 0
 	last_date := ""
 	last_time := 0.0
-	for scanner.Scan() {
-		json_line := scanner.Bytes()
-		if len(json_line) == 0 {
-			continue
-		}
+	for {
+		select {
+		case json_line, ok := <-line_chan:
+			if !ok {
+				return
+			}
 
-		html_lines := formatJsonLogLine(json_line, &last_date, &last_time)
-		byte_counter += len(html_lines)
-		if !no_truncate && byte_counter > config.StatusStream.LogTruncationSize {
-			err := fullWrite(w, "-- LOG TRUNCATED DUE TO LENGTH, <a href=log_stream?notrunc>Click here to keep going</a> --\n")
+			html_lines := formatJsonLogLine(json_line, &last_date, &last_time)
+			byte_counter += len(html_lines)
+			if !no_truncate && byte_counter > config.StatusStream.LogTruncationSize {
+				err := fullWrite(w, "-- LOG TRUNCATED DUE TO LENGTH, <a href=log_stream?notrunc>Click here to keep going</a> --\n")
+				if err != nil {
+					return
+				}
+				break
+			}
+			err = fullWrite(w, html_lines)
 			if err != nil {
 				return
 			}
-			break
-		}
-		err = fullWrite(w, html_lines)
-		if err != nil {
+
+		case <-r.Context().Done():
 			return
 		}
 	}
