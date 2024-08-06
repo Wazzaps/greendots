@@ -390,7 +390,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	closed := w.(http.CloseNotifier).CloseNotify()
 	w.Header().Set("Content-Type", "application/json")
 	var expected_sizes []int
 	err := json.NewDecoder(r.Body).Decode(&expected_sizes)
@@ -403,6 +403,21 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Flusher goroutine
+	go func() {
+		for {
+			select {
+			case <-closed:
+				return
+			default:
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond)
+		}
+	}()
+
 	project := r.PathValue("project")
 	run := r.PathValue("run")
 	if isDirTraversal(project) || isDirTraversal(run) {
@@ -411,9 +426,6 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for {
-		if ctx.Err() != nil {
-			return
-		}
 		workers_to_check := []int{}
 		for i, expected_size := range expected_sizes {
 			statusPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
@@ -427,8 +439,12 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(workers_to_check) == 0 {
-			time.Sleep(time.Duration(config.StatusPoll.SleepMs) * time.Millisecond)
-			continue
+			select {
+			case <-w.(http.CloseNotifier).CloseNotify():
+				return
+			case <-time.After(time.Duration(config.StatusPoll.SleepMs) * time.Millisecond):
+				continue
+			}
 		} else {
 			err := json.NewEncoder(w).Encode(statusPollResponse{WorkersToCheck: workers_to_check})
 			if err != nil {
@@ -514,7 +530,7 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 }
 
 func logStreamHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	closed := w.(http.CloseNotifier).CloseNotify()
 	w.Header().Set("Content-Type", "text/html")
 
 	no_truncate := r.URL.Query().Has("notrunc")
@@ -566,19 +582,26 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				break
 			}
-			if ctx.Err() != nil {
-				break
+			select {
+			case <-closed:
+				return
+			default:
 			}
 		}
 	}()
 
 	// Flusher goroutine
 	go func() {
-		for ctx.Err() == nil {
+		for {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			time.Sleep(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond)
+
+			select {
+			case <-closed:
+				return
+			case <-time.After(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond):
+			}
 		}
 	}()
 
@@ -768,8 +791,8 @@ func main() {
 	// the assets doesn't need nocache nor etag since it has hashes in the name
 	// of the files so it handles it on its own
 	http.HandleFunc("/", nocache(serveFrontendHandler))
-	log.Println("Listening on :8080")
-	err = http.ListenAndServe(":8080", nil)
+	log.Printf("Listening on %s", config.ListenAddress)
+	err = http.ListenAndServe(config.ListenAddress, nil)
 	if err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
