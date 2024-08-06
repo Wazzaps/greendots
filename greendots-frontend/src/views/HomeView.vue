@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import ProjectsGrid from '@/components/ProjectsGrid.vue';
 import logo from '@/assets/logo.svg';
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 const docs_url = ref('/api/v1/');
 // const source_code_url = ref('javascript:');
+
+onMounted(() => {
+  document.title = `GreenDots`;
+});
 </script>
 
 <template>

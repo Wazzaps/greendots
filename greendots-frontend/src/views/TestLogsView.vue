@@ -1,9 +1,22 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 const iframe = ref<HTMLIFrameElement | null>(null);
 const router = useRouter();
+const route = useRoute();
+
+const labels = {
+  d: 'Debug',
+  i: 'Info',
+  w: 'Warn',
+  e: 'Error',
+  c: 'Critical',
+  t: 'Timestamps'
+};
+
+let hidden_log_levels: string[] = JSON.parse(localStorage.getItem('hidden_log_levels') || '[]');
+
 function toggleStatus(e: Event, level: string) {
   if (!iframe.value) {
     return;
@@ -14,10 +27,13 @@ function toggleStatus(e: Event, level: string) {
   if (body) {
     if (checked) {
       body.classList.remove(className);
+      hidden_log_levels = hidden_log_levels.filter((l) => l !== level);
     } else {
       body.classList.add(className);
+      hidden_log_levels.push(level);
     }
   }
+  localStorage.setItem('hidden_log_levels', JSON.stringify(hidden_log_levels));
 }
 
 function keydown(e: KeyboardEvent) {
@@ -28,6 +44,7 @@ function keydown(e: KeyboardEvent) {
 
 onMounted(() => {
   document.addEventListener('keydown', keydown);
+  document.title = `${route.params.test} (${route.params.run} - ${route.params.project}) · GreenDots`;
 });
 onUnmounted(() => {
   document.removeEventListener('keydown', keydown);
@@ -40,24 +57,13 @@ onUnmounted(() => {
     <span class="run-name">{{ $route.params.run }}</span>
     <span class="test-name">{{ $route.params.test }}</span>
     <div class="spacer"></div>
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'd')" />Debug</label
-    >
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'i')" />Info</label
-    >
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'w')" />Warn</label
-    >
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'e')" />Error</label
-    >
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 'c')" />Critical</label
-    >
-    <label class="level-toggle"
-      ><input type="checkbox" checked @change="(e) => toggleStatus(e, 't')" />Timestamps</label
-    >
+    <label class="level-toggle" v-for="level in ['d', 'i', 'w', 'e', 'c', 't']" :key="level">
+      <input
+        type="checkbox"
+        :checked="!hidden_log_levels.includes(level)"
+        @change="(e) => toggleStatus(e, level)"
+      />{{ labels[level] }}
+    </label>
     <!-- <span>TODO:Search</span>
     <span>TODO:Statistics</span>
     <span>TODO:Settings</span> -->
@@ -83,6 +89,11 @@ nav {
   font-size: 18px;
   z-index: 100;
   padding: 0 32px;
+}
+nav .test-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .spacer {
   flex-grow: 1;

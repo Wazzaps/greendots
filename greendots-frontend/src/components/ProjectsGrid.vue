@@ -1,47 +1,79 @@
 <script setup lang="ts">
 import { TestDataController } from '@/controllers/TestDataController';
-import { inject } from 'vue';
+import { computed, inject, ref } from 'vue';
+import ProjectCard from './ProjectCard.vue';
+
+const pinnedProjectIds = ref((localStorage.getItem('pinnedProjects') || null)?.split('\x00') || []);
 
 const test_data = inject<TestDataController>('test_data')!;
 const projects = await test_data.getProjectsList();
+const pinnedProjects = computed(() =>
+  projects.filter((project) => pinnedProjectIds.value.includes(project.id))
+);
+const unpinnedProjects = computed(() =>
+  projects.filter((project) => !pinnedProjectIds.value.includes(project.id))
+);
+
+function pinProject(projectId: string) {
+  if (pinnedProjectIds.value.includes(projectId)) {
+    return;
+  }
+  pinnedProjectIds.value.push(projectId);
+  localStorage.setItem('pinnedProjects', pinnedProjectIds.value.join('\x00'));
+}
+
+function unpinProject(projectId: string) {
+  pinnedProjectIds.value = pinnedProjectIds.value.filter((id) => id !== projectId);
+  localStorage.setItem('pinnedProjects', pinnedProjectIds.value.join('\x00'));
+}
 </script>
 
 <template>
   <main>
-    <div class="project" v-for="project in projects" :key="project.id">
-      <h2>
-        <RouterLink :to="`/${project.id}`">{{ project.name }}</RouterLink>
-      </h2>
-      <ul>
-        <li class="run-row" v-for="run in project.runs" :key="run.id">
-          <RouterLink class="run-name" :to="`/${project.id}/${run.id}`">{{ run.name }}</RouterLink>
-          &nbsp;|&nbsp;
-          <span class="run-age" :title="run.created_at">{{ run.pretty_age }}</span>
-        </li>
-      </ul>
+    <div class="projects pinned-projects">
+      <ProjectCard
+        v-for="project in pinnedProjects"
+        :key="project.id"
+        :project="project"
+        :pinned="true"
+        @pin="pinProject(project.id)"
+        @unpin="unpinProject(project.id)"
+      />
+    </div>
+    <hr v-if="pinnedProjects.length > 0 && unpinnedProjects.length > 0" />
+    <div class="projects unpinned-projects">
+      <ProjectCard
+        v-for="project in unpinnedProjects"
+        :key="project.id"
+        :project="project"
+        :pinned="false"
+        @pin="pinProject(project.id)"
+        @unpin="unpinProject(project.id)"
+      />
     </div>
   </main>
 </template>
 
 <style scoped>
 main {
-  display: flex;
-  flex-direction: column;
-  max-width: 400px;
+  max-width: calc(400px * 3 + 32px * 3);
   margin: 0 auto;
+  margin-bottom: 3rem;
 }
-main a {
-  color: #ffffff;
+.projects {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  /* display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); */
+  padding: 0 32px;
+  gap: 16px;
+}
+hr {
+  border-color: #656589;
+  margin: 2rem 0;
 }
 h2 {
   margin-top: 0;
-}
-.project {
-  background: #151519;
-  padding: 1rem;
-  padding-top: 0.5rem;
-  border-radius: 8px;
-  margin-bottom: 1rem;
-  box-shadow: 0 8px 16px rgba(21, 21, 25, 0.6);
 }
 </style>

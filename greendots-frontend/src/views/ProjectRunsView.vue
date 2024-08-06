@@ -1,5 +1,12 @@
 <script setup lang="ts">
 import ProjectRuns from '@/components/ProjectRuns.vue';
+import { onMounted } from 'vue';
+import { useRoute } from 'vue-router';
+
+const route = useRoute();
+onMounted(() => {
+  document.title = `${route.params.project} · GreenDots`;
+});
 </script>
 
 <template>

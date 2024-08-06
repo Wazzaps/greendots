@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"embed"
-	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,14 +16,13 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.2.0"
+const VERSION = "0.3.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -32,6 +30,9 @@ var apiDocs []byte
 //go:generate ./gen_logs_view.sh
 //go:embed logs_view.min.html
 var logsViewPrefix []byte
+
+//go:embed tail_logs_view_prefix.min.html
+var tailLogsViewPrefix []byte
 
 // -- Types --
 
@@ -42,15 +43,15 @@ type runsList struct {
 	Runs []run `json:"runs"`
 }
 type project struct {
-	Id   string `json:"id"`
-	Name string `json:"name"`
-	Runs []run  `json:"runs"`
+	Id       string                 `json:"id"`
+	Runs     []run                  `json:"runs"`
+	Metadata map[string]interface{} `json:"metadata"`
 }
 type run struct {
-	Id        string `json:"id"`
-	Name      string `json:"name"`
-	PrettyAge string `json:"pretty_age"`
-	CreatedAt string `json:"created_at"`
+	Id        string                 `json:"id"`
+	PrettyAge string                 `json:"pretty_age"`
+	CreatedAt string                 `json:"created_at"`
+	Metadata  map[string]interface{} `json:"metadata"`
 }
 type runPlan struct {
 	WorkerCount int                          `json:"worker_count"`
@@ -126,7 +127,7 @@ var config = greendotsConfig{
 		LogTruncationSize: 1024 * 1024,
 	},
 	LogTail: logTailConfig{
-		DefaultLineCount: 5,
+		DefaultLineCount: 25,
 	},
 	Client: clientConfig{
 		TestStatus: clientTestStatusConfig{
@@ -160,11 +161,16 @@ func getProjectRuns(project string) ([]run, error) {
 			continue
 		}
 
+		metadata, err := getRunMetadata(project, e.Name())
+		if err != nil {
+			metadata = nil
+		}
+
 		runs = append(runs, run{
 			Id:        e.Name(),
-			Name:      e.Name(),
 			CreatedAt: info.ModTime().Format(time.RFC3339),
 			PrettyAge: prettytime.Format(info.ModTime()),
+			Metadata:  metadata,
 		})
 	}
 
@@ -173,6 +179,30 @@ func getProjectRuns(project string) ([]run, error) {
 	})
 
 	return runs, nil
+}
+
+func getProjectMetadata(project string) (map[string]interface{}, error) {
+	metadataPath := filepath.Join(config.ProjectsDir, project, "metadata.toml")
+
+	var metadata map[string]interface{}
+	_, err := toml.DecodeFile(metadataPath, &metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	return metadata, nil
+}
+
+func getRunMetadata(project, run string) (map[string]interface{}, error) {
+	metadataPath := filepath.Join(config.ProjectsDir, project, run, "metadata.toml")
+
+	var metadata map[string]interface{}
+	_, err := toml.DecodeFile(metadataPath, &metadata)
+	if err != nil {
+		return nil, err
+	}
+
+	return metadata, nil
 }
 
 func fullWriteBytes(w http.ResponseWriter, data []byte) error {
@@ -234,10 +264,15 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		metadata, err := getProjectMetadata(projectEntry.Name())
+		if err != nil {
+			metadata = nil
+		}
+
 		projects = append(projects, project{
-			Id:   projectEntry.Name(),
-			Name: projectEntry.Name(),
-			Runs: runs[:min(10, len(runs))],
+			Id:       projectEntry.Name(),
+			Runs:     runs[:min(10, len(runs))],
+			Metadata: metadata,
 		})
 	}
 
@@ -355,6 +390,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	w.Header().Set("Content-Type", "application/json")
 	var expected_sizes []int
 	err := json.NewDecoder(r.Body).Decode(&expected_sizes)
@@ -375,6 +411,9 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		workers_to_check := []int{}
 		for i, expected_size := range expected_sizes {
 			statusPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
@@ -475,6 +514,7 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 }
 
 func logStreamHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	w.Header().Set("Content-Type", "text/html")
 
 	no_truncate := r.URL.Query().Has("notrunc")
@@ -508,12 +548,13 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Read the log file, and keep trying on EOF
 	chunk_pipe_rd, chunk_pipe_wr := io.Pipe()
+	defer chunk_pipe_rd.Close()
 	go func() {
+		defer chunk_pipe_wr.Close()
 		chunk := make([]byte, config.StatusStream.ChunkSize)
 		for {
 			n, err := log_fd.Read(chunk)
 			if err != nil && err != io.EOF {
-				chunk_pipe_wr.CloseWithError(err)
 				break
 			}
 			if n == 0 || err == io.EOF {
@@ -523,17 +564,17 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			_, err = chunk_pipe_wr.Write(chunk[:n])
 			if err != nil {
-				log.Println("write error:", err)
+				break
+			}
+			if ctx.Err() != nil {
 				break
 			}
 		}
 	}()
 
 	// Flusher goroutine
-	done := atomic.Bool{}
-	defer done.Store(true)
 	go func() {
-		for !done.Load() {
+		for ctx.Err() == nil {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
@@ -597,20 +638,40 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer log_fd.Close()
 
-	// TODO: Seek to last 128KB of log file, it will probably be enough
+	// Seek to last 128KB of log file, it will probably be enough
+	start_offset, err := log_fd.Seek(-128*1024, io.SeekEnd)
+	if err != nil {
+		start_offset, err = log_fd.Seek(0, io.SeekStart)
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	}
+	is_start := start_offset == 0
 
 	// Send wrapper HTML
+	err = fullWriteBytes(w, tailLogsViewPrefix)
+	if err != nil {
+		return
+	}
 	err = fullWriteBytes(w, logsViewPrefix)
 	if err != nil {
 		return
 	}
 
-	lines := []string{"-- LOG START --\n"}
+	lines := []string{}
+	if is_start {
+		lines = append(lines, "-- LOG START --\n")
+	}
 
 	// Go over the log file and format it to html
 	scanner := bufio.NewScanner(log_fd)
 	last_date := ""
 	last_time := 0.0
+	if !is_start {
+		// Skip the first line if we're not at the start, since it's probably malformed json
+		scanner.Scan()
+	}
 	for scanner.Scan() {
 		json_line := scanner.Bytes()
 		if len(json_line) == 0 {

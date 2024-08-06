@@ -7,10 +7,14 @@
         background: #222;
         color: #ddd;
         color-scheme: dark;
-        --d-display: block;
       }
       body {
         margin: 8px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
       }
       .s {
         font-weight: bold;
@@ -83,6 +87,8 @@
       window.scroll_to_bottom = true;
       let autoscrolling = false;
       let size_queue = [];
+      let loaded_hidden_log_levels = false;
+
       document.addEventListener("scroll", function () {
         if (!autoscrolling) {
           if (
@@ -100,7 +106,9 @@
         autoscrolling = false;
       });
 
-      if (location.pathname.endsWith("log_stream")) {
+      // TODO: Maybe we want filtering in the log tail?
+      const is_in_log_stream = location.pathname.endsWith("log_stream");
+      if (is_in_log_stream) {
         document.addEventListener("readystatechange", function () {
           if (document.readyState == "complete") {
             document
@@ -108,11 +116,27 @@
               .appendChild(
                 document.createTextNode("\n-- LOG STREAM INTERRUPTED --\n")
               );
+            if (autoscrolling) {
+              window.scrollTo(0, document.body.scrollHeight);
+            }
           }
         });
       }
 
       setInterval(() => {
+        if (
+          is_in_log_stream &&
+          !loaded_hidden_log_levels &&
+          document.body !== null
+        ) {
+          loaded_hidden_log_levels = true;
+          const hidden_log_levels = JSON.parse(
+            localStorage.getItem("hidden_log_levels") || "[]"
+          );
+          for (const lvl of hidden_log_levels) {
+            document.body.classList.add("hide-" + lvl);
+          }
+        }
         size_queue.push(document.body.scrollHeight);
         if (size_queue.length > 2) {
           size_queue.shift();

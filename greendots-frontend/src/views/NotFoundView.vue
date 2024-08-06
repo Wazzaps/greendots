@@ -1,4 +1,9 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { onMounted } from 'vue';
+onMounted(() => {
+  document.title = `Not Found · GreenDots`;
+});
+</script>
 
 <template>
   <main>

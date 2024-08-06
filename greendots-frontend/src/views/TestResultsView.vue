@@ -225,14 +225,20 @@ function handleCanvasPointerDown(e: MouseEvent) {
 function handleCanvasPointerUp(e: MouseEvent) {
   const [test, inside_circle] = canvasGetRelevantTest(e);
   if (test && inside_circle && test_item_pointer_down.value?.id == test.id) {
-    router.push({
-      name: 'test_logs',
-      params: {
-        project: route.params.project,
-        run: route.params.run,
-        test: test.id
-      }
-    });
+    if (e.ctrlKey) {
+      window.open(
+        `/${encodeURIComponent(route.params.project)}/${encodeURIComponent(route.params.run)}/${encodeURIComponent(test.id)}/`
+      );
+    } else {
+      router.push({
+        name: 'test_logs',
+        params: {
+          project: route.params.project,
+          run: route.params.run,
+          test: test.id
+        }
+      });
+    }
   }
   test_item_pointer_down.value = null;
 }
@@ -401,6 +407,10 @@ const width_resizer = makeResizer(
 );
 
 const _window = window;
+
+onMounted(() => {
+  document.title = `${route.params.run} (${route.params.project}) · GreenDots`;
+});
 </script>
 
 <template>
@@ -505,7 +515,7 @@ const _window = window;
       </span>
     </div>
     <iframe
-      :src="`/api/v1/projects/${$route.params.project}/runs/${$route.params.run}/test/${hovered_test.id}/log_tail`"
+      :src="`/api/v1/projects/${encodeURIComponent($route.params.project)}/runs/${encodeURIComponent($route.params.run)}/test/${encodeURIComponent(hovered_test.id)}/log_tail`"
     ></iframe>
   </div>
 </template>
@@ -598,7 +608,8 @@ nav a {
   padding: 4px 8px;
 }
 .test-hover-popup > iframe {
-  width: 600px;
+  min-width: 600px;
+  width: 100%;
   height: 250px;
   border: none;
 }
