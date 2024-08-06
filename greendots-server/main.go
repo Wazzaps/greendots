@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -390,7 +391,9 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
+	done := r.Context().Done()
 	closed := w.(http.CloseNotifier).CloseNotify()
+
 	w.Header().Set("Content-Type", "application/json")
 	var expected_sizes []int
 	err := json.NewDecoder(r.Body).Decode(&expected_sizes)
@@ -404,17 +407,23 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Flusher goroutine
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	defer wg.Wait()
 	go func() {
+		defer wg.Done()
 		for {
-			select {
-			case <-closed:
-				return
-			default:
-			}
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
-			time.Sleep(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond)
+			select {
+			case <-done:
+				return
+			case <-closed:
+				return
+			case <-time.After(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond):
+			}
+
 		}
 	}()
 
@@ -530,7 +539,9 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 }
 
 func logStreamHandler(w http.ResponseWriter, r *http.Request) {
+	done := r.Context().Done()
 	closed := w.(http.CloseNotifier).CloseNotify()
+
 	w.Header().Set("Content-Type", "text/html")
 
 	no_truncate := r.URL.Query().Has("notrunc")
@@ -563,10 +574,14 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the log file, and keep trying on EOF
+	wg := sync.WaitGroup{}
+	defer wg.Wait()
+	wg.Add(1)
 	chunk_pipe_rd, chunk_pipe_wr := io.Pipe()
 	defer chunk_pipe_rd.Close()
 	go func() {
 		defer chunk_pipe_wr.Close()
+		defer wg.Done()
 		chunk := make([]byte, config.StatusStream.ChunkSize)
 		for {
 			n, err := log_fd.Read(chunk)
@@ -575,29 +590,34 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if n == 0 || err == io.EOF {
 				// Reached EOF, wait a bit before trying again
-				time.Sleep(time.Duration(config.StatusStream.EofSleepMs) * time.Millisecond)
+				select {
+				case <-done:
+					return
+				case <-closed:
+					return
+				case <-time.After(time.Duration(config.StatusStream.EofSleepMs) * time.Millisecond):
+				}
 				continue
 			}
 			_, err = chunk_pipe_wr.Write(chunk[:n])
 			if err != nil {
 				break
 			}
-			select {
-			case <-closed:
-				return
-			default:
-			}
 		}
 	}()
 
 	// Flusher goroutine
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
 
 			select {
+			case <-done:
+				return
 			case <-closed:
 				return
 			case <-time.After(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond):
