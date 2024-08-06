@@ -16,6 +16,7 @@ class LivelogLoggingHandler(logging.Handler):
         self._log_file = open(path, "w")
         self._lock = threading.Lock()
         self.setLevel(logging.DEBUG)
+        self.setFormatter(logging.Formatter("%(message)s"))
 
     def write_log(self, value):
         with self._lock:
@@ -25,18 +26,15 @@ class LivelogLoggingHandler(logging.Handler):
         self._log_file.flush()
 
     def emit(self, record: logging.LogRecord):
+        message = self.format(record)
         self.write_log(
             {
                 "name": record.name,
                 "level": record.levelname,
                 "time": record.created,
-                "message": record.message,
+                "message": message,
             }
         )
-
-    def close(self):
-        self._log_file.close()
-        self._log_file = None
 
 
 class StatusFile:
@@ -91,6 +89,14 @@ class ProgressLogger:
 
         self._done = True
         self._status_file.log({"type": "progress", "percentage": 1.0})
+
+
+def json_encode_default(o):
+    f = getattr(o, '__greendots_format__', None)
+    if f is None:
+        return repr(o)
+    else:
+        return f()
 
 
 class LivelogStdoutHandler(io.TextIOBase):
@@ -259,7 +265,7 @@ class LivelogPlugin:
 
         # write the plan to a file
         with open(os.path.join(self._log_path, "plan.json"), "w") as f:
-            json.dump(plan, f, indent=4)
+            json.dump(plan, f, sort_keys=True, default=json_encode_default, indent=4)
 
     def pytest_runtest_logstart(self, nodeid, location):
         # we are not a worker, ignore
@@ -298,7 +304,6 @@ class LivelogPlugin:
         # since no one should be using it anymore
         assert self._handler is not None
         logging.getLogger().removeHandler(self._handler)
-        self._handler.close()
         self._handler = None
 
         self._worst_outcome = None
