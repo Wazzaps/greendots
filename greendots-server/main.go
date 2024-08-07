@@ -23,7 +23,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.3.0"
+const VERSION = "0.4.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -406,27 +406,6 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Flusher goroutine
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	defer wg.Wait()
-	go func() {
-		defer wg.Done()
-		for {
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-			select {
-			case <-done:
-				return
-			case <-closed:
-				return
-			case <-time.After(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond):
-			}
-
-		}
-	}()
-
 	project := r.PathValue("project")
 	run := r.PathValue("run")
 	if isDirTraversal(project) || isDirTraversal(run) {
@@ -449,7 +428,9 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(workers_to_check) == 0 {
 			select {
-			case <-w.(http.CloseNotifier).CloseNotify():
+			case <-done:
+				return
+			case <-closed:
 				return
 			case <-time.After(time.Duration(config.StatusPoll.SleepMs) * time.Millisecond):
 				continue
