@@ -162,16 +162,10 @@ func getProjectRuns(project string) ([]run, error) {
 			continue
 		}
 
-		metadata, err := getRunMetadata(project, e.Name())
-		if err != nil {
-			metadata = nil
-		}
-
 		runs = append(runs, run{
 			Id:        e.Name(),
 			CreatedAt: info.ModTime().Format(time.RFC3339),
 			PrettyAge: prettytime.Format(info.ModTime()),
-			Metadata:  metadata,
 		})
 	}
 
@@ -264,6 +258,15 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		runs = runs[:min(10, len(runs))]
+
+		for _, run := range runs {
+			metadata, err := getRunMetadata(projectEntry.Name(), run.Id)
+			if err != nil {
+				metadata = nil
+			}
+			run.Metadata = metadata
+		}
 
 		metadata, err := getProjectMetadata(projectEntry.Name())
 		if err != nil {
@@ -272,7 +275,7 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 
 		projects = append(projects, project{
 			Id:       projectEntry.Name(),
-			Runs:     runs[:min(10, len(runs))],
+			Runs:     runs,
 			Metadata: metadata,
 		})
 	}
@@ -297,6 +300,14 @@ func projectRunsHandler(w http.ResponseWriter, r *http.Request) {
 	runs, err := getProjectRuns(project)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+	}
+
+	for _, run := range runs {
+		metadata, err := getRunMetadata(project, run.Id)
+		if err != nil {
+			metadata = nil
+		}
+		run.Metadata = metadata
 	}
 
 	result := runsList{Runs: runs}
