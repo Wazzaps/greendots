@@ -14,8 +14,8 @@ const is_plan_loading = ref(true);
 let plan_loading_generation = 0; // used to resolve parallel request issues
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const x_height = ref(150);
-const y_width = ref(150);
+const x_height = ref(parseInt(localStorage.getItem('test_results_headers_height')!) || 150);
+const y_width = ref(parseInt(localStorage.getItem('test_results_headers_width')!) || 150);
 const row_params = ref<string[]>([]);
 const rows = ref<any[]>([]);
 const cols = ref<any[]>([]);
@@ -352,7 +352,8 @@ let user_select_sem = 0;
 function makeResizer(
   distance_ref: Ref<number>,
   axis_extractor: (e: PointerEvent) => number,
-  window_size_axis: () => number
+  window_size_axis: () => number,
+  local_storage_key: string
 ) {
   let is_resizing = false;
   let resize_offset = 0;
@@ -360,6 +361,7 @@ function makeResizer(
     distance_ref.value = Math.floor(
       Math.max(70, Math.min(window_size_axis() * 0.8, axis_extractor(e) + resize_offset))
     );
+    localStorage.setItem(local_storage_key, distance_ref.value.toString());
   }, 10);
   function begin_resize(e: PointerEvent) {
     if (is_resizing) {
@@ -398,12 +400,14 @@ function makeResizer(
 const height_resizer = makeResizer(
   x_height,
   (e) => e.clientY,
-  () => window.innerHeight
+  () => window.innerHeight,
+  'test_results_headers_height'
 );
 const width_resizer = makeResizer(
   y_width,
   (e) => e.clientX,
-  () => window.innerWidth
+  () => window.innerWidth,
+  'test_results_headers_width'
 );
 
 const _window = window;
