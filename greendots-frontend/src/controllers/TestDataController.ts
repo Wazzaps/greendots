@@ -103,7 +103,7 @@ export class TestDataController {
     ).runs;
   }
 
-  @memoPromise(10000)
+  @memoPromise(Infinity)
   async getTestRunPlan(project: string, run: string): Promise<RunPlan> {
     return await fetchObject(
       `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/plan`,
