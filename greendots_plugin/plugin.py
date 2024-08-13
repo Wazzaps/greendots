@@ -328,6 +328,8 @@ class LivelogPlugin:
 
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_setup(self, item):
+        __tracebackhide__ = True
+
         if not self._validate_worker():
             return (yield)
 
@@ -345,6 +347,8 @@ class LivelogPlugin:
 
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_call(self, item):
+        __tracebackhide__ = True
+        
         if not self._validate_worker():
             return (yield)
 
@@ -362,6 +366,8 @@ class LivelogPlugin:
 
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_teardown(self, item):
+        __tracebackhide__ = True
+        
         if not self._validate_worker():
             return (yield)
 
