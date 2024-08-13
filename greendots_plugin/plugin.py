@@ -146,55 +146,48 @@ class LivelogPlugin:
     def __init__(self):
         self._log_path = None
 
-        self._worker_id = None
-        self._worker_count = None
         self._status_file: StatusFile = None
-
         self._handler = None
         self._stdout = None
         self._stderr = None
 
         self._worst_outcome = None
 
+        self._xdist_supported = False
+
     def pytest_configure(self, config: pytest.Config):
         self._log_path = config.getoption("livelog")
         if self._log_path is None:
             return
 
+        # I don't care if we create on everything including
+        # the workers, it doesn't change anything
         os.makedirs(self._log_path, exist_ok=True)
 
+        # make sure to mark we have xdist loaded
         if config.pluginmanager.hasplugin("xdist"):
-            worker = os.getenv("PYTEST_XDIST_WORKER")
-            worker_count = os.getenv("PYTEST_XDIST_WORKER_COUNT")
-            numprocesses = config.option.numprocesses
+            self._xdist_supported = True
 
-            if not worker and not worker_count and not numprocesses:
-                # if we don't have the worker arguments and we don't
-                # have the numprocesses argument then we are def a
-                # master, since otherwise we will have one or the others
-                self._worker_id = 0
-                self._worker_count = 1
+    def pytest_sessionstart(self, session):
+        # if no log path ignore
+        if self._log_path is None:
+            return
 
-            elif worker is not None:
-                # we have a worker number, so we are def a worker
-                assert worker.startswith("gw")
-                self._worker_id = int(worker[2:])
-
-                # worker zero also sets the plan.json
-                if self._worker_id == 0:
-                    self._worker_count = int(worker_count)
-
+        # figure the worker id, if we have xdist then get from
+        # the worker id, if master assume zero, without xdist we
+        # assume zero
+        if self._xdist_supported:
+            import xdist
+            worker_id = xdist.get_xdist_worker_id(session)
+            if worker_id == 'master':
+                worker_id = 0
+            else:
+                assert worker_id.startswith('gw')
+                worker_id = int(worker_id[len('gw'):])
         else:
-            # no xdist, so just a single worker
-            self._worker_id = 0
-            self._worker_count = 1
+            worker_id = 0
 
-        if self._worker_id is not None:
-            self._status_file = StatusFile(
-                open(
-                    os.path.join(self._log_path, f"status.{self._worker_id}.jsonl"), "w"
-                )
-            )
+        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{worker_id}.jsonl"), "w"))
 
     def pytest_runtest_logreport(self, report: pytest.TestReport):
         if self._status_file is None:
@@ -221,10 +214,27 @@ class LivelogPlugin:
         self._status_file.log(d)
 
     def pytest_collection_finish(self, session: pytest.Session):
-        # only the first worker manages the plan.json
-        # to make sure that we don't have collisions
-        if self._worker_id != 0:
+        if self._log_path is None:
             return
+
+        # if we have xdist then properly get the worker count,
+        # otherwise assume we have a single worker
+        # only allow the master or the first worker to create the
+        # plan.json to avoid weird collisions
+        if self._xdist_supported:
+            import xdist
+
+            worker_id = xdist.get_xdist_worker_id(session)
+            if worker_id == 'master':
+                worker_count = 1
+            elif worker_id == 'gw0':
+                worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"))
+            else:
+                # not the master or first worker, ignore
+                return
+
+        else:
+            worker_count = 1
 
         # go over the items and generate the plan
         groups = {}
@@ -258,7 +268,7 @@ class LivelogPlugin:
             )
 
         plan = {
-            "worker_count": self._worker_count,
+            "worker_count": worker_count,
             "groups": groups,
             "row_params": [] if row_params is None else list(row_params),
         }
