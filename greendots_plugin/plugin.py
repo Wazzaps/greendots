@@ -5,6 +5,7 @@ import os.path
 import sys
 import threading
 import time
+import hashlib
 from typing import Iterable
 
 import pytest
@@ -142,6 +143,10 @@ def pytest_addoption(parser):
     )
 
 
+def _hash(nodeid: str) -> str:
+    return hashlib.md5(nodeid.encode()).hexdigest()
+
+
 class LivelogPlugin:
     def __init__(self):
         self._log_path = None
@@ -196,7 +201,7 @@ class LivelogPlugin:
         d = {
             "type": report.when,
             "outcome": report.outcome,
-            "test": report.nodeid,
+            "test": _hash(report.nodeid),
         }
 
         if report.outcome == "failed":
@@ -264,7 +269,7 @@ class LivelogPlugin:
                 groups[test_module] = []
 
             groups[test_module].append(
-                {"id": nodeid, "name": test_name, "params": test_params}
+                {"id": _hash(nodeid), "name": test_name, "params": test_params}
             )
 
         plan = {
@@ -285,9 +290,8 @@ class LivelogPlugin:
         assert self._handler is None
 
         # generate the path name
-        log_file = nodeid.replace("/", "_")
         # TODO: if name too long handle it
-        log_file = os.path.join(self._log_path, log_file + ".log.jsonl")
+        log_file = os.path.join(self._log_path, _hash(nodeid) + ".log.jsonl")
 
         # open the handler and set it
         self._handler = LivelogLoggingHandler(log_file)
@@ -300,14 +304,14 @@ class LivelogPlugin:
 
         self._worst_outcome = "passed"
 
-        self._status_file.log({"type": "start", "test": nodeid})
+        self._status_file.log({"type": "start", "test": _hash(nodeid)})
 
     def pytest_runtest_logfinish(self, nodeid, location):
         if self._status_file is None:
             return
 
         self._status_file.log(
-            {"type": "finish", "outcome": self._worst_outcome, "test": nodeid}
+            {"type": "finish", "outcome": self._worst_outcome, "test": _hash(nodeid)}
         )
 
         # we can remove the handler and close it
@@ -348,7 +352,7 @@ class LivelogPlugin:
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_call(self, item):
         __tracebackhide__ = True
-        
+
         if not self._validate_worker():
             return (yield)
 
@@ -367,7 +371,7 @@ class LivelogPlugin:
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_teardown(self, item):
         __tracebackhide__ = True
-        
+
         if not self._validate_worker():
             return (yield)
 
@@ -399,7 +403,7 @@ class LivelogPlugin:
 
     @pytest.fixture
     def log_progress(self, request: pytest.FixtureRequest):
-        return ProgressLogger(self._status_file, request.node.nodeid)
+        return ProgressLogger(self._status_file, _hash(request.node.nodeid))
 
 
 def pytest_configure(config):
