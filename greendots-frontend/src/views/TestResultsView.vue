@@ -4,9 +4,20 @@ import {
   TestDataProcessor,
   type Col,
   type ProcessedPlan,
+  type Row,
   type TestItem
 } from '@/controllers/TestDataController';
-import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref, h, shallowRef } from 'vue';
+import {
+  ref,
+  effect,
+  inject,
+  onUnmounted,
+  watch,
+  onMounted,
+  shallowRef,
+  computed,
+  triggerRef
+} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { debounce } from 'lodash-es';
 import { makeConfetti } from '@/controllers/confetti';
@@ -25,14 +36,19 @@ const y_width = ref(parseInt(localStorage.getItem('test_results_headers_width')!
 // --- Test plan ---
 const plan = shallowRef<ProcessedPlan | null>(null);
 const test_data_processor = new TestDataProcessor(test_data, (event) => {
-  console.log('Event:', event);
+  // console.log('Event:', event);
   switch (event.type) {
     case 'reset':
       plan.value = null;
       is_plan_loading.value = true;
       break;
     case 'plan':
-      plan.value = event;
+      if (plan.value && plan.value.id == event.id) {
+        // Vue doesn't catch the mutation in this case, manually trigger the ref
+        triggerRef(plan);
+      } else {
+        plan.value = event;
+      }
       is_plan_loading.value = false;
       break;
     case 'status_update':
@@ -44,6 +60,10 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
       break;
   }
 });
+// test_data_processor.setFilter((test) => test.name == 'test_stdout' && test.params['arch'] == 'x86');
+// test_data_processor.setFilter((test) => test.name == 'test_failure');
+// test_data_processor.setFilter((test) => test.status == 'skip');
+// test_data_processor.setFilter((test) => test.group == 'test_thing_10');
 effect(() => {
   if (!route.params.project || !route.params.run) {
     return;
@@ -54,6 +74,14 @@ effect(() => {
 onUnmounted(() => {
   test_data_processor.unsubscribe();
 });
+
+const shown_rows = computed(
+  () => plan.value?.rows.map((r, i) => [r, i] as [Row, number]).filter((r) => r[0].shown) || []
+);
+const shown_cols = computed(
+  () => plan.value?.cols.map((c, i) => [c, i] as [Col, number]).filter((c) => c[0].shown) || []
+);
+const shown_test_groups = computed(() => plan.value?.test_groups.filter((tg) => tg.shown) || []);
 
 // --- Canvas rendering & input management ---
 let rerender_scheduled = false;
@@ -90,6 +118,9 @@ function renderCanvas(_time: number) {
 
   // Draw each test
   for (const test of plan.value.test_items) {
+    if (!test.shown) {
+      continue;
+    }
     const x = (test.col_idx + 0.5) * cell_size;
     const y = (test.row_idx + 0.5) * cell_size;
     const color = cell_colors[test.status] || cell_colors['pending'];
@@ -148,7 +179,11 @@ function canvasGetRelevantTest(e: MouseEvent): [TestItem | undefined, boolean] {
   const radius = 8;
   const inside_circle = dx * dx + dy * dy <= radius * radius;
 
-  return [plan.value?.test_items.find((t) => t.col_idx == col && t.row_idx == row), inside_circle];
+  const test = plan.value?.test_items.find((t) => t.col_idx == col && t.row_idx == row);
+  if (!test || !test.shown) {
+    return [undefined, false];
+  }
+  return [test, inside_circle];
 }
 
 const test_item_pointer_down = ref<TestItem | null>(null);
@@ -324,24 +359,24 @@ onMounted(() => {
     ></div>
     <!-- TODO: maybe replace with non-range iter for key stability -->
     <span
-      v-for="i in plan!.cols.length"
-      :key="`chdr-${plan!.id}-${i}`"
+      v-for="[col, col_idx] in shown_cols"
+      :key="`chdr-${plan!.id}-${col_idx}`"
       class="column-hdr"
       :class="{
-        unhighlighted: highlighted_col !== null && highlighted_col !== i - 1
+        unhighlighted: highlighted_col !== null && highlighted_col !== col_idx
       }"
-      :style="{ 'grid-row': 1, 'grid-column': i + 2 }"
-      v-html="format_col(plan!.cols[i - 1])"
+      :style="{ 'grid-row': 1, 'grid-column': col_idx + 3 }"
+      v-html="format_col(col)"
     ></span>
     <span
-      v-for="i in plan!.rows.length"
-      :key="`rhdr-${plan!.id}-${i}`"
+      v-for="[row, row_idx] in shown_rows"
+      :key="`rhdr-${plan!.id}-${row_idx}`"
       class="row-hdr"
       :class="{
-        unhighlighted: highlighted_row !== null && highlighted_row !== i - 1
+        unhighlighted: highlighted_row !== null && highlighted_row !== row_idx
       }"
-      :style="{ 'grid-row': i + 2, 'grid-column': 1 }"
-      >{{ plan!.row_params.map((rp) => plan!.rows[i - 1].params[rp]).join(' | ') }}</span
+      :style="{ 'grid-row': row_idx + 3, 'grid-column': 1 }"
+      >{{ plan!.row_params.map((rp) => row.params[rp]).join(' | ') }}</span
     >
     <canvas
       class="results-canvas"
@@ -352,7 +387,7 @@ onMounted(() => {
       @pointerleave="handleCanvasPointerLeave"
     ></canvas>
     <div
-      v-for="tg in plan!.test_groups"
+      v-for="tg in shown_test_groups"
       class="test-group"
       :key="`tg-${tg.name}`"
       :style="{
@@ -477,6 +512,7 @@ nav a {
   user-select: none;
   background: #111;
   border-radius: 8px;
+  z-index: 101;
 }
 .test-hover-popup > div {
   display: flex;

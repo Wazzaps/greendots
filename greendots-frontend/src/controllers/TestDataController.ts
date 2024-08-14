@@ -176,10 +176,10 @@ export class TestDataFetcher {
         let res;
         try {
           res = await fetchObject(
-          `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_poll`,
-          'test status size updates',
+            `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_poll`,
+            'test status size updates',
             { body: JSON.stringify(offsets), method: 'POST', signal: abort_controller.signal }
-        );
+          );
         } catch (e) {
           // Try again in a bit
           await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 1000));
@@ -241,11 +241,13 @@ export type Row = {
   params: { [param: string]: string };
 
   shown: boolean;
+  _shown_tests: number; // Number of tests shown in this row
 };
 export type Col = {
   params: { [param: string]: string };
 
   shown: boolean;
+  _shown_tests: number; // Number of tests shown in this col
 };
 export type TestGroup = {
   name: string;
@@ -253,6 +255,7 @@ export type TestGroup = {
   end: number;
 
   shown: boolean;
+  _shown_tests: number; // Number of tests shown in this group
 };
 
 export type ProcessedPlan = {
@@ -275,11 +278,12 @@ export class TestDataProcessor {
   // Inputs
   private project: string | null = null;
   private run: string | null = null;
-  // private filter: null | ((_: TestItem) => boolean) = null;
+  private filter: null | ((_: TestItem) => boolean) = null;
 
   // State
   private plan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
   private successes_left_for_surprise: number | null = null;
+  private seen_whole_summary = false;
   // private exceptions: Array<string> = [];
   private statusUnsub: (() => void) | null = null;
   private next_plan_id = 0;
@@ -296,6 +300,7 @@ export class TestDataProcessor {
     this.run = run;
     // this.exceptions = [];
     this.successes_left_for_surprise = null;
+    this.seen_whole_summary = false;
 
     (async () => {
       const raw_plan = await this.fetcher.getTestRunPlan(project, run);
@@ -305,7 +310,7 @@ export class TestDataProcessor {
       // Arrange test items in a grid
       this.plan = TestDataProcessor.processTestPlan(raw_plan);
       this.plan.id = this.next_plan_id++;
-      // TODO: filter/enrich?
+      this.applyFilter();
       this.callback(this.plan);
 
       this.statusUnsub = this.fetcher.subscribeTestStatusUpdates(
@@ -316,9 +321,63 @@ export class TestDataProcessor {
     })();
   }
 
+  public setFilter(filter: null | ((_: TestItem) => boolean)) {
+    this.filter = filter;
+    this.applyFilter();
+  }
+
   public unsubscribe() {
     this.statusUnsub?.();
     this.statusUnsub = null;
+  }
+
+  private applyFilter(test_list?: TestItem[]) {
+    if (this.plan) {
+      let changed = false;
+      for (const test of test_list || this.plan.test_items) {
+        const prev_shown = test.shown;
+        test.shown = this.filter ? this.filter(test) : true;
+        if (prev_shown != test.shown) {
+          // console.log('test.shown changed:', test);
+          changed = true;
+          this.plan.rows[test.row_idx]._shown_tests += test.shown ? 1 : -1;
+          this.plan.cols[test.col_idx]._shown_tests += test.shown ? 1 : -1;
+          this.plan.test_groups.forEach((group) => {
+            if (test.group == group.name) {
+              group._shown_tests += test.shown ? 1 : -1;
+            }
+          });
+        }
+      }
+      for (const row of this.plan.rows) {
+        const prev_shown = row.shown;
+        row.shown = row._shown_tests > 0;
+        if (prev_shown != row.shown) {
+          // console.log('row.shown changed:', row);
+          changed = true;
+        }
+      }
+      for (const col of this.plan.cols) {
+        const prev_shown = col.shown;
+        col.shown = col._shown_tests > 0;
+        if (prev_shown != col.shown) {
+          // console.log('col.shown changed:', col);
+          changed = true;
+        }
+      }
+      for (const group of this.plan.test_groups) {
+        const prev_shown = group.shown;
+        group.shown = group._shown_tests > 0;
+        if (prev_shown != group.shown) {
+          // console.log('group.shown changed:', group);
+          changed = true;
+        }
+      }
+      if (changed) {
+        console.log('Filter results changed, notifying component');
+        this.callback(this.plan);
+      }
+    }
   }
 
   private static processTestPlan(raw_plan: RunPlan): TestDataProcessorEvent & ProcessedPlan {
@@ -358,13 +417,17 @@ export class TestDataProcessor {
         if (row_idx == -1) {
           row_idx = rows_json.length;
           rows_json.push(row_data_json);
-          rows.push({ params: row_data, shown: true });
+          rows.push({ params: row_data, shown: true, _shown_tests: 1 });
+        } else {
+          rows[row_idx]._shown_tests += 1;
         }
         let col_idx = cols_json.indexOf(col_data_json);
         if (col_idx == -1) {
           col_idx = cols_json.length;
           cols_json.push(col_data_json);
-          cols.push({ params: col_data, shown: true });
+          cols.push({ params: col_data, shown: true, _shown_tests: 1 });
+        } else {
+          cols[col_idx]._shown_tests += 1;
         }
         // Add test item
         test_id_to_test_idx[test.id] = test_items.length;
@@ -386,7 +449,8 @@ export class TestDataProcessor {
         name: group_name,
         start: group_start_idx,
         end: group_end_idx,
-        shown: true
+        shown: true,
+        _shown_tests: group.length
       });
     }
 
@@ -411,6 +475,7 @@ export class TestDataProcessor {
 
       // TODO: refactor to be less broken with malicious server
       if (status_update.type == 'summary_done') {
+        this.seen_whole_summary = true;
         let new_successes_left_for_surprise = 0;
         for (const item of this.plan!.test_items) {
           if (item.status != 'success') {
@@ -418,6 +483,7 @@ export class TestDataProcessor {
           }
         }
         this.successes_left_for_surprise = new_successes_left_for_surprise;
+        this.applyFilter();
       } else if (status_update.outcome == 'failed' || status_update.outcome == 'error') {
         // TODO: Collect exceptions
         test.status = 'fail';
@@ -445,6 +511,9 @@ export class TestDataProcessor {
       }
 
       if (test_idx !== undefined) {
+        if (this.seen_whole_summary) {
+          this.applyFilter([test]);
+        }
         this.callback({ type: 'status_update', test_idx });
       }
 
