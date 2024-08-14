@@ -4,24 +4,19 @@ import {
   TestDataProcessor,
   type Col,
   type ProcessedPlan,
-  type Row,
   type TestItem
 } from '@/controllers/TestDataController';
-import {
-  ref,
-  effect,
-  inject,
-  onUnmounted,
-  watch,
-  onMounted,
-  shallowRef,
-  computed,
-  triggerRef
-} from 'vue';
+import { ref, effect, inject, onUnmounted, watch, onMounted, shallowRef, triggerRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { debounce } from 'lodash-es';
 import { makeConfetti } from '@/controllers/confetti';
 import { makeResizer } from '@/controllers/resizer';
+import {
+  parse as liqe_parse,
+  serialize as liqe_serialize,
+  type LiqeQuery
+} from '@/utils/liqe-vendored/Liqe';
+import { liqe_to_function } from '@/controllers/liqe2js';
 
 const router = useRouter();
 const route = useRoute();
@@ -43,12 +38,9 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
       is_plan_loading.value = true;
       break;
     case 'plan':
-      if (plan.value && plan.value.id == event.id) {
-        // Vue doesn't catch the mutation in this case, manually trigger the ref
-        triggerRef(plan);
-      } else {
-        plan.value = event;
-      }
+      plan.value = event;
+      // Vue doesn't catch the mutation in every case, manually trigger the ref
+      triggerRef(plan);
       is_plan_loading.value = false;
       break;
     case 'status_update':
@@ -60,10 +52,23 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
       break;
   }
 });
-// test_data_processor.setFilter((test) => test.name == 'test_stdout' && test.params['arch'] == 'x86');
-// test_data_processor.setFilter((test) => test.name == 'test_failure');
-// test_data_processor.setFilter((test) => test.status == 'skip');
-// test_data_processor.setFilter((test) => test.group == 'test_thing_10');
+
+// --- Filtering ---
+const filter_string = ref('');
+const filter_string_error = ref(false);
+const parsed_filter = ref<LiqeQuery | null>(null);
+effect(() => {
+  try {
+    parsed_filter.value = filter_string.value ? liqe_parse(filter_string.value) : null;
+    filter_string_error.value = false;
+  } catch (e) {
+    filter_string_error.value = true;
+  }
+  test_data_processor.setFilter(
+    parsed_filter.value ? liqe_to_function(parsed_filter.value!) : null
+  );
+});
+
 effect(() => {
   if (!route.params.project || !route.params.run) {
     return;
@@ -74,14 +79,6 @@ effect(() => {
 onUnmounted(() => {
   test_data_processor.unsubscribe();
 });
-
-const shown_rows = computed(
-  () => plan.value?.rows.map((r, i) => [r, i] as [Row, number]).filter((r) => r[0].shown) || []
-);
-const shown_cols = computed(
-  () => plan.value?.cols.map((c, i) => [c, i] as [Col, number]).filter((c) => c[0].shown) || []
-);
-const shown_test_groups = computed(() => plan.value?.test_groups.filter((tg) => tg.shown) || []);
 
 // --- Canvas rendering & input management ---
 let rerender_scheduled = false;
@@ -118,9 +115,6 @@ function renderCanvas(_time: number) {
 
   // Draw each test
   for (const test of plan.value.test_items) {
-    if (!test.shown) {
-      continue;
-    }
     const x = (test.col_idx + 0.5) * cell_size;
     const y = (test.row_idx + 0.5) * cell_size;
     const color = cell_colors[test.status] || cell_colors['pending'];
@@ -180,7 +174,7 @@ function canvasGetRelevantTest(e: MouseEvent): [TestItem | undefined, boolean] {
   const inside_circle = dx * dx + dy * dy <= radius * radius;
 
   const test = plan.value?.test_items.find((t) => t.col_idx == col && t.row_idx == row);
-  if (!test || !test.shown) {
+  if (!test) {
     return [undefined, false];
   }
   return [test, inside_circle];
@@ -285,7 +279,7 @@ function requestRenderCanvas() {
   }
 }
 
-const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 100, { maxWait: 250 });
+const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 30, { maxWait: 100 });
 watch([plan, canvas], requestRenderCanvasDebounced, { deep: true });
 
 // --- Header resizers ---
@@ -326,8 +320,18 @@ onMounted(() => {
 
 <template>
   <nav>
-    <span class="project-name">{{ $route.params.project }}</span>
-    <span class="run-name">{{ $route.params.run }}</span>
+    <div>
+      <span class="project-name">{{ $route.params.project }}</span>
+      <span class="run-name">{{ $route.params.run }}</span>
+    </div>
+    <input
+      type="text"
+      class="filter-input"
+      :class="{ error: filter_string_error }"
+      v-model="filter_string"
+      placeholder="Filter..."
+    />
+    <div></div>
     <!-- <span>TODO:Search</span>
     <span>TODO:Statistics</span>
     <span>TODO:Settings</span> -->
@@ -359,7 +363,7 @@ onMounted(() => {
     ></div>
     <!-- TODO: maybe replace with non-range iter for key stability -->
     <span
-      v-for="[col, col_idx] in shown_cols"
+      v-for="(col, col_idx) in plan!.cols"
       :key="`chdr-${plan!.id}-${col_idx}`"
       class="column-hdr"
       :class="{
@@ -369,7 +373,7 @@ onMounted(() => {
       v-html="format_col(col)"
     ></span>
     <span
-      v-for="[row, row_idx] in shown_rows"
+      v-for="(row, row_idx) in plan!.rows"
       :key="`rhdr-${plan!.id}-${row_idx}`"
       class="row-hdr"
       :class="{
@@ -387,7 +391,7 @@ onMounted(() => {
       @pointerleave="handleCanvasPointerLeave"
     ></canvas>
     <div
-      v-for="tg in shown_test_groups"
+      v-for="tg in plan?.test_groups"
       class="test-group"
       :key="`tg-${tg.name}`"
       :style="{
@@ -439,7 +443,7 @@ nav {
   right: 0;
   height: 32px;
   display: flex;
-  justify-content: start;
+  justify-content: space-between;
   gap: 1rem;
   background: #121212;
   font-size: 18px;
@@ -448,6 +452,11 @@ nav {
 }
 nav a {
   color: #aeaeae;
+}
+nav > div {
+  display: flex;
+  justify-content: start;
+  gap: 1rem;
 }
 .loading-msg {
   padding: 48px 32px 32px;
@@ -560,6 +569,20 @@ nav a {
   height: 2px;
   background: #aaa;
   margin: 3px;
+}
+.filter-input {
+  width: 600px;
+  font-size: 15px;
+  background: #1a1a1a;
+  font-family: 'Exo 2 Variable', sans-serif;
+  color: #fff;
+  border: 1px solid #333;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin: 2px;
+}
+.filter-input.error {
+  background: rgb(98, 53, 53);
 }
 </style>
 <style>
