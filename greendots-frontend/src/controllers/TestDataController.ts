@@ -151,19 +151,31 @@ export class TestDataFetcher {
     const abort_controller = new AbortController();
     (async () => {
       let headers: Headers | null = null;
-      const statuses = await this.getTestStatusSummary(project, run, {
-        signal: abort_controller.signal
-      });
       while (!done) {
-        const chunk = await statuses.next();
-        if (chunk.done) {
-          headers = chunk.value[1];
-          break;
-        }
+        try {
+          const statuses = await this.getTestStatusSummary(project, run, {
+            signal: abort_controller.signal
+          });
+          while (!done) {
+            const chunk = await statuses.next();
+            if (chunk.done) {
+              headers = chunk.value[1] as Headers | null;
+              break;
+            }
 
-        callback(chunk.value);
+            if (done) return;
+            callback(chunk.value);
+          }
+          break;
+        } catch (e) {
+          // Try again in a bit
+          await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 1000));
+        }
       }
+
+      if (done) return;
       callback([{ type: 'summary_done' }]);
+
       if (!headers) throw new Error('No headers');
       const offsets = headers
         .get('x-end-offset')!
@@ -197,7 +209,9 @@ export class TestDataFetcher {
             .decode(buffers[worker_id].subarray(0, newline_idx) as ArrayBuffer)
             .split('\n');
 
+          if (done) return;
           callback(lines.map((line) => JSON.parse(line)));
+
           buffers[worker_id] = sliceBuf(buffers[worker_id], newline_idx + 1);
         }
         // Wait a bit to avoid hammering the server
