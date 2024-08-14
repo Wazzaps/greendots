@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { TestDataController } from '@/controllers/TestDataController';
+import { TestDataFetcher } from '@/controllers/TestDataController';
 import { computed, inject, ref } from 'vue';
 import ProjectCard from './ProjectCard.vue';
 
 const pinnedProjectIds = ref((localStorage.getItem('pinnedProjects') || null)?.split('\x00') || []);
 
-const test_data = inject<TestDataController>('test_data')!;
+const test_data = inject<TestDataFetcher>('test_data')!;
 const projects = await test_data.getProjectsList();
 const pinnedProjects = computed(() =>
   projects.filter((project) => pinnedProjectIds.value.includes(project.id))

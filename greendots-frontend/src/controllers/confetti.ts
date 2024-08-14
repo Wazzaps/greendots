@@ -3,7 +3,7 @@ import JSConfetti from '@/utils/confetti/index';
 let confetti: JSConfetti | null = null;
 let confettiTimeout: number | null = null;
 
-export default function makeConfetti() {
+export function makeConfetti() {
   if (!confetti) {
     confetti = new JSConfetti();
   }

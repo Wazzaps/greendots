@@ -1,122 +1,65 @@
 <script setup lang="ts">
-import statusUpdateReducer from '@/controllers/statusUpdateReducer';
-import { TestDataController } from '@/controllers/TestDataController';
-import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref, h } from 'vue';
+import {
+  TestDataFetcher,
+  TestDataProcessor,
+  type Col,
+  type ProcessedPlan,
+  type TestItem
+} from '@/controllers/TestDataController';
+import { ref, effect, inject, onUnmounted, watch, onMounted, type Ref, h, shallowRef } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { debounce, throttle } from 'lodash-es';
-import makeConfetti from '@/controllers/confetti';
+import { debounce } from 'lodash-es';
+import { makeConfetti } from '@/controllers/confetti';
+import { makeResizer } from '@/controllers/resizer';
 
 const router = useRouter();
 const route = useRoute();
-const test_data = inject<TestDataController>('test_data')!;
+const test_data = inject<TestDataFetcher>('test_data')!;
 
 const is_plan_loading = ref(true);
-let plan_loading_generation = 0; // used to resolve parallel request issues
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const x_height = ref(parseInt(localStorage.getItem('test_results_headers_height')!) || 150);
 const y_width = ref(parseInt(localStorage.getItem('test_results_headers_width')!) || 150);
-const row_params = ref<string[]>([]);
-const rows = ref<any[]>([]);
-const cols = ref<any[]>([]);
-const test_items = ref<any[]>([]);
-const test_groups = ref<any[]>([]);
-const successes_left_for_surprise = ref(0);
-let test_items_id_index: { [_: string]: number } = {};
-// Load plan and arrange into grid
-effect(async () => {
-  is_plan_loading.value = true;
-  const gen = ++plan_loading_generation;
-  const plan = await test_data.getTestRunPlan(
-    route.params.project as string,
-    route.params.run as string
-  );
-  if (gen != plan_loading_generation) {
+
+// --- Test plan ---
+const plan = shallowRef<ProcessedPlan | null>(null);
+const test_data_processor = new TestDataProcessor(test_data, (event) => {
+  console.log('Event:', event);
+  switch (event.type) {
+    case 'reset':
+      plan.value = null;
+      is_plan_loading.value = true;
+      break;
+    case 'plan':
+      plan.value = event;
+      is_plan_loading.value = false;
+      break;
+    case 'status_update':
+      requestRenderCanvasDebounced();
+      break;
+    case 'surprise':
+      console.log('All tests passed, confetti time!');
+      makeConfetti();
+      break;
+  }
+});
+effect(() => {
+  if (!route.params.project || !route.params.run) {
     return;
   }
-
-  let new_rows = [];
-  let rows_json = [];
-  let new_cols = [];
-  let cols_json = [];
-  let new_test_items = [];
-  let new_test_items_id_index: { [_: string]: any } = {};
-  let new_test_groups = [];
-  for (const group_name in plan.groups) {
-    const group = plan.groups[group_name];
-    const group_start_idx = new_cols.length;
-    for (const test of group) {
-      const row_data: { [_: string]: string } = {};
-      const col_data: { [_: string]: string } = {
-        group: group_name,
-        test_name: test.name
-      };
-      // Collect row and col data
-      for (const row_name of plan.row_params) {
-        if (test.params[row_name] !== undefined) {
-          row_data[row_name] = test.params[row_name];
-        } else {
-          row_data[row_name] = 'common';
-        }
-      }
-      for (const param_name in test.params) {
-        if (!plan.row_params.includes(param_name)) {
-          col_data[param_name] = test.params[param_name];
-        }
-      }
-      // Collect in global rows/cols
-      const row_data_json = JSON.stringify(row_data);
-      const col_data_json = JSON.stringify(col_data);
-      let row_idx = rows_json.indexOf(row_data_json);
-      if (row_idx == -1) {
-        row_idx = rows_json.length;
-        rows_json.push(row_data_json);
-        new_rows.push(row_data);
-      }
-      let col_idx = cols_json.indexOf(col_data_json);
-      if (col_idx == -1) {
-        col_idx = cols_json.length;
-        cols_json.push(col_data_json);
-        new_cols.push(col_data);
-      }
-      // Add test item
-      let new_test_item = {
-        id: test.id,
-        grp: group_name,
-        row: row_idx,
-        col: col_idx,
-        status: 'pending',
-        progress: 0
-      };
-      new_test_items_id_index[test.id] = new_test_items.length;
-      new_test_items.push(new_test_item);
-    }
-    const group_end_idx = new_cols.length;
-    new_test_groups.push({
-      name: group_name,
-      start: group_start_idx,
-      end: group_end_idx
-    });
-  }
-
-  // console.log(plan);
-  // console.log(rows);
-  // console.log(cols);
-  // console.log(new_test_items);
-  row_params.value = plan.row_params;
-  rows.value = new_rows;
-  cols.value = new_cols;
-  test_items.value = new_test_items;
-  test_items_id_index = new_test_items_id_index;
-  test_groups.value = new_test_groups;
-
-  is_plan_loading.value = false;
+  test_data_processor.setTestRun(route.params.project as string, route.params.run as string);
 });
 
+onUnmounted(() => {
+  test_data_processor.unsubscribe();
+});
+
+// --- Canvas rendering & input management ---
 let rerender_scheduled = false;
 function renderCanvas(_time: number) {
   rerender_scheduled = false;
-  if (!canvas.value) {
+  if (!canvas.value || !plan.value) {
     return;
   }
   const ctx: CanvasRenderingContext2D = canvas.value.getContext('2d')!;
@@ -135,8 +78,8 @@ function renderCanvas(_time: number) {
   // Resize canvas if needed
   const [canvas_width, canvas_height] = [canvas.value.width, canvas.value.height];
   const [requested_width, requested_height] = [
-    cols.value.length * cell_size,
-    rows.value.length * cell_size
+    plan.value.cols.length * cell_size,
+    plan.value.rows.length * cell_size
   ];
   if (canvas_width != requested_width || canvas_height != requested_height) {
     canvas.value.width = requested_width;
@@ -146,9 +89,9 @@ function renderCanvas(_time: number) {
   }
 
   // Draw each test
-  for (const test of test_items.value) {
-    const x = (test.col + 0.5) * cell_size;
-    const y = (test.row + 0.5) * cell_size;
+  for (const test of plan.value.test_items) {
+    const x = (test.col_idx + 0.5) * cell_size;
+    const y = (test.row_idx + 0.5) * cell_size;
     const color = cell_colors[test.status] || cell_colors['pending'];
     ctx.fillStyle = color;
 
@@ -180,19 +123,24 @@ function renderCanvas(_time: number) {
   // }
 }
 
-function canvasGetRelevantTest(e: MouseEvent): any {
+function canvasGetRelevantTest(e: MouseEvent): [TestItem | undefined, boolean] {
   const rect = canvas.value?.getBoundingClientRect();
   if (!rect) {
     console.error('Canvas not ready');
-    return;
+    return [undefined, false];
   }
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
   const cell_size = 22;
   const col = Math.floor(x / cell_size);
   const row = Math.floor(y / cell_size);
-  if (col < 0 || row < 0 || col >= cols.value.length || row >= rows.value.length) {
-    return;
+  if (
+    col < 0 ||
+    row < 0 ||
+    col >= (plan.value?.cols.length || 0) ||
+    row >= (plan.value?.rows.length || 0)
+  ) {
+    return [undefined, false];
   }
   // check if click was inside circle
   const dx = (x % cell_size) - cell_size / 2;
@@ -200,13 +148,13 @@ function canvasGetRelevantTest(e: MouseEvent): any {
   const radius = 8;
   const inside_circle = dx * dx + dy * dy <= radius * radius;
 
-  return [test_items.value.find((t) => t.col == col && t.row == row), inside_circle];
+  return [plan.value?.test_items.find((t) => t.col_idx == col && t.row_idx == row), inside_circle];
 }
 
-const test_item_pointer_down = ref<any | null>(null);
+const test_item_pointer_down = ref<TestItem | null>(null);
 const highlighted_row = ref<number | null>(null);
 const highlighted_col = ref<number | null>(null);
-const hovered_test = ref<any | null>(null);
+const hovered_test = ref<TestItem | null>(null);
 const popup_shown = ref(false);
 const popup_preloading = ref(false);
 const mouse_pos_x = ref(0);
@@ -272,8 +220,8 @@ function handleCanvasPointerMove(e: MouseEvent) {
     mouse_pos_y.value = 0;
   }
   if (test) {
-    highlighted_row.value = test.row;
-    highlighted_col.value = test.col;
+    highlighted_row.value = test.row_idx;
+    highlighted_col.value = test.col_idx;
   } else {
     highlighted_row.value = null;
     highlighted_col.value = null;
@@ -302,101 +250,10 @@ function requestRenderCanvas() {
   }
 }
 
-watch([test_items, canvas, cols, rows], debounce(requestRenderCanvas, 100, { maxWait: 250 }), {
-  deep: true
-});
+const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 100, { maxWait: 250 });
+watch([plan, canvas], requestRenderCanvasDebounced, { deep: true });
 
-let updates_unsub: (() => void) | null = null;
-effect(() => {
-  if (is_plan_loading.value) {
-    return;
-  }
-  successes_left_for_surprise.value = 0;
-  updates_unsub?.();
-
-  const callback = (chunk: any[]) => {
-    for (const status_update of chunk) {
-      const test_idx = test_items_id_index[status_update.test];
-      statusUpdateReducer(status_update, test_items, test_idx, successes_left_for_surprise, () => {
-        console.log('All tests passed, confetti time!');
-        makeConfetti();
-      });
-    }
-  };
-  updates_unsub = test_data.subscribeTestStatusUpdates(
-    route.params.project as string,
-    route.params.run as string,
-    callback
-  );
-});
-
-onUnmounted(() => {
-  updates_unsub?.();
-});
-
-function format_col(col: any) {
-  return Object.entries(col)
-    .filter(([k, _]) => k != 'group')
-    .map(([k, v]) => {
-      let res = '';
-      if (k != 'test_name') {
-        res += `<span class="col-hdr-lbl">${k}:</span> `;
-      }
-      res += v;
-      return res;
-    })
-    .join(' ');
-}
-
-let user_select_sem = 0;
-function makeResizer(
-  distance_ref: Ref<number>,
-  axis_extractor: (e: PointerEvent) => number,
-  window_size_axis: () => number,
-  local_storage_key: string
-) {
-  let is_resizing = false;
-  let resize_offset = 0;
-  const resize = throttle((e: PointerEvent) => {
-    distance_ref.value = Math.floor(
-      Math.max(70, Math.min(window_size_axis() * 0.8, axis_extractor(e) + resize_offset))
-    );
-    localStorage.setItem(local_storage_key, distance_ref.value.toString());
-  }, 10);
-  function begin_resize(e: PointerEvent) {
-    if (is_resizing) {
-      return;
-    }
-    const start_mouse = axis_extractor(e);
-    const start_target = distance_ref.value;
-    resize_offset = start_target - start_mouse;
-    document.addEventListener('pointermove', resize);
-    user_select_sem += 1;
-    if (user_select_sem == 1) {
-      document.body.style.userSelect = 'none';
-    }
-    is_resizing = true;
-  }
-  function end_resize() {
-    if (!is_resizing) {
-      return;
-    }
-    document.removeEventListener('pointermove', resize);
-    user_select_sem -= 1;
-    if (user_select_sem == 0) {
-      document.body.style.userSelect = '';
-    }
-    is_resizing = false;
-  }
-  onMounted(() => {
-    window.addEventListener('pointerup', end_resize);
-  });
-  onUnmounted(() => {
-    window.removeEventListener('pointerup', end_resize);
-  });
-
-  return { begin_resize };
-}
+// --- Header resizers ---
 const height_resizer = makeResizer(
   x_height,
   (e) => e.clientY,
@@ -409,6 +266,21 @@ const width_resizer = makeResizer(
   () => window.innerWidth,
   'test_results_headers_width'
 );
+
+// --- Helpers ---
+function format_col(col: Col) {
+  return Object.entries(col.params)
+    .filter(([k, _]) => k != 'group')
+    .map(([k, v]) => {
+      let res = '';
+      if (k != 'test_name') {
+        res += `<span class="col-hdr-lbl">${k}:</span> `;
+      }
+      res += v;
+      return res;
+    })
+    .join(' ');
+}
 
 const _window = window;
 
@@ -430,15 +302,15 @@ onMounted(() => {
     :style="{
       '--x-height': x_height + 'px',
       '--y-width': y_width + 'px',
-      '--col-count': cols.length,
-      '--row-count': rows.length
+      '--col-count': plan!.cols.length,
+      '--row-count': plan!.rows.length
     }"
     v-if="!is_plan_loading"
   >
     <div class="legend" :style="{ 'grid-row': 1, 'grid-column': 1 }">
       <div class="legend-y">test name</div>
       <div class="legend-line"></div>
-      <div class="legend-x">{{ row_params.join(' | ') }}</div>
+      <div class="legend-x">{{ plan!.row_params.join(' | ') }}</div>
     </div>
     <div
       class="row-highlight"
@@ -452,24 +324,24 @@ onMounted(() => {
     ></div>
     <!-- TODO: maybe replace with non-range iter for key stability -->
     <span
-      v-for="i in cols.length"
-      :key="`chdr-${i}`"
+      v-for="i in plan!.cols.length"
+      :key="`chdr-${plan!.id}-${i}`"
       class="column-hdr"
       :class="{
         unhighlighted: highlighted_col !== null && highlighted_col !== i - 1
       }"
       :style="{ 'grid-row': 1, 'grid-column': i + 2 }"
-      v-html="format_col(cols[i - 1])"
+      v-html="format_col(plan!.cols[i - 1])"
     ></span>
     <span
-      v-for="i in rows.length"
-      :key="`rhdr-${i}`"
+      v-for="i in plan!.rows.length"
+      :key="`rhdr-${plan!.id}-${i}`"
       class="row-hdr"
       :class="{
         unhighlighted: highlighted_row !== null && highlighted_row !== i - 1
       }"
       :style="{ 'grid-row': i + 2, 'grid-column': 1 }"
-      >{{ row_params.map((rp) => rows[i - 1][rp]).join(' | ') }}</span
+      >{{ plan!.row_params.map((rp) => plan!.rows[i - 1].params[rp]).join(' | ') }}</span
     >
     <canvas
       class="results-canvas"
@@ -480,7 +352,7 @@ onMounted(() => {
       @pointerleave="handleCanvasPointerLeave"
     ></canvas>
     <div
-      v-for="tg in test_groups"
+      v-for="tg in plan!.test_groups"
       class="test-group"
       :key="`tg-${tg.name}`"
       :style="{
