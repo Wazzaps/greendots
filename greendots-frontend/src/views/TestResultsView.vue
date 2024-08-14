@@ -514,6 +514,11 @@ nav a {
   font-size: 13px;
   align-items: center;
 }
+.test-group > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .test-group-spacer {
   flex-grow: 1;
   height: 2px;

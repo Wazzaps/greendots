@@ -110,10 +110,11 @@ export class TestDataFetcher {
     );
   }
 
-  getTestStatusSummary(project: string, run: string) {
+  getTestStatusSummary(project: string, run: string, options?: RequestInit) {
     return fetchObjects(
       `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_summary`,
-      'test run status summary'
+      'test run status summary',
+      options
     );
   }
 
@@ -147,9 +148,12 @@ export class TestDataFetcher {
     callback: (chunk: TestStatusUpdateEvent[]) => void
   ) {
     let done = false;
+    const abort_controller = new AbortController();
     (async () => {
       let headers: Headers | null = null;
-      const statuses = await this.getTestStatusSummary(project, run);
+      const statuses = await this.getTestStatusSummary(project, run, {
+        signal: abort_controller.signal
+      });
       while (!done) {
         const chunk = await statuses.next();
         if (chunk.done) {
@@ -169,13 +173,15 @@ export class TestDataFetcher {
       const buffers = offsets.map(() => new Uint8Array(0));
       while (!done) {
         // Wait for updated status files
-        const res = await fetchObject(
+        let res;
+        try {
+          res = await fetchObject(
           `/api/v1/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/status_poll`,
           'test status size updates',
-          { body: JSON.stringify(offsets), method: 'POST' }
+            { body: JSON.stringify(offsets), method: 'POST', signal: abort_controller.signal }
         );
-        if (res.workers_to_check.length === 0) {
-          // Server is telling us to chill
+        } catch (e) {
+          // Try again in a bit
           await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 1000));
           continue;
         }
@@ -202,6 +208,7 @@ export class TestDataFetcher {
     // Unsubscribe function
     return () => {
       done = true;
+      abort_controller.abort();
     };
   }
 }

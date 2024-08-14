@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"embed"
 	"encoding/json"
 	"flag"
@@ -23,7 +24,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.4.0"
+const VERSION = "0.5.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -78,7 +79,8 @@ type logLine struct {
 }
 
 type statusPollConfig struct {
-	SleepMs int `toml:"sleep_ms" json:"sleep_ms"`
+	SleepMs   int `toml:"sleep_ms" json:"sleep_ms"`
+	TimeoutMs int `toml:"timeout_ms" json:"timeout_ms"`
 }
 
 type statusStreamConfig struct {
@@ -119,7 +121,8 @@ type greendotsConfig struct {
 
 var config = greendotsConfig{
 	StatusPoll: statusPollConfig{
-		SleepMs: 1000,
+		SleepMs:   1000,
+		TimeoutMs: 30000,
 	},
 	StatusStream: statusStreamConfig{
 		ChunkSize:         1024,
@@ -402,7 +405,8 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
-	done := r.Context().Done()
+	new_ctx, _ := context.WithTimeout(r.Context(), time.Duration(config.StatusPoll.TimeoutMs)*time.Millisecond)
+	done := new_ctx.Done()
 	closed := w.(http.CloseNotifier).CloseNotify()
 
 	w.Header().Set("Content-Type", "application/json")
