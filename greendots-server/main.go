@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -125,7 +126,7 @@ var config = greendotsConfig{
 		TimeoutMs: 30000,
 	},
 	StatusStream: statusStreamConfig{
-		ChunkSize:         1024,
+		ChunkSize:         128 * 1024,
 		EofSleepMs:        500,
 		FlushSleepMs:      300,
 		LogTruncationSize: 1024 * 1024,
@@ -203,7 +204,7 @@ func getRunMetadata(project, run string) (map[string]interface{}, error) {
 	return metadata, nil
 }
 
-func fullWriteBytes(w http.ResponseWriter, data []byte) error {
+func fullWriteBytes(w io.Writer, data []byte) error {
 	for len(data) > 0 {
 		written, err := w.Write(data)
 		if err != nil {
@@ -534,6 +535,9 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 	return html_lines
 }
 
+var LT = []byte("<")
+var LT_ESC = []byte("&lt;")
+
 func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 	done := r.Context().Done()
 	closed := w.(http.CloseNotifier).CloseNotify()
@@ -595,28 +599,9 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
-			_, err = chunk_pipe_wr.Write(chunk[:n])
+			err = fullWriteBytes(chunk_pipe_wr, bytes.ReplaceAll(chunk[:n], LT, LT_ESC))
 			if err != nil {
 				break
-			}
-		}
-	}()
-
-	// Flusher goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
-
-			select {
-			case <-done:
-				return
-			case <-closed:
-				return
-			case <-time.After(time.Duration(config.StatusStream.FlushSleepMs) * time.Millisecond):
 			}
 		}
 	}()
@@ -645,6 +630,8 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+
+		w.(http.Flusher).Flush()
 	}
 }
 
