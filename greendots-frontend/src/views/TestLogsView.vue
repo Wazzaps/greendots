@@ -42,12 +42,20 @@ function keydown(e: KeyboardEvent) {
   }
 }
 
+function onMessage(e: MessageEvent) {
+  if (e.origin === window.location.origin && e.data === 'close-logs-view') {
+    router.back();
+  }
+}
+
 onMounted(() => {
   document.addEventListener('keydown', keydown);
+  window.addEventListener('message', onMessage);
   document.title = `${route.params.test} (${route.params.run} - ${route.params.project}) · GreenDots`;
 });
 onUnmounted(() => {
   document.removeEventListener('keydown', keydown);
+  window.removeEventListener('message', onMessage);
 });
 </script>
 

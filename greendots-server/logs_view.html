@@ -121,6 +121,12 @@
             }
           }
         });
+
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") {
+            window.parent.postMessage("close-logs-view", "*");
+          }
+        });
       }
 
       setInterval(() => {
