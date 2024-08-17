@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import hashlib
+import base64
 from typing import Iterable
 
 import pytest
@@ -143,8 +144,54 @@ def pytest_addoption(parser):
     )
 
 
-def _hash(nodeid: str) -> str:
-    return hashlib.md5(nodeid.encode()).hexdigest()
+_FILENAME_SPECIAL_CHARS = '<>"/\\|?*'
+
+
+def _hash(s):
+    digest = base64.b32encode(hashlib.blake2b(s.encode('utf-8'), digest_size=5).digest()).decode('utf-8')
+    return digest
+
+
+def _create_log_name(nodeid):
+
+    # handle long file names properly
+    log_file_name = nodeid
+
+    # check if has special symbols
+    has_special_symbols = False
+    for c in _FILENAME_SPECIAL_CHARS:
+        if c in log_file_name:
+            has_special_symbols = True
+
+    # if we have special symbols we will suffix the
+    # file with a hash to make sure the mangling won't
+    # create name collisions, and we want to make sure we
+    # account for that in the filename
+    length = len(log_file_name)
+    if has_special_symbols:
+        length += 9
+
+    # check for filename being too long, truncate it if so
+    # and add a hash to make it unique
+    if length > 110:
+        begin = log_file_name[:50]
+        end = log_file_name[-50:]
+        digest = _hash(nodeid)
+        log_file_name = f'{begin}-{digest}-{end}'
+
+    # if we have special character append the digest to make
+    # sure we won't have a name collision
+    elif has_special_symbols:
+        digest = _hash(nodeid)
+        log_file_name = f'{log_file_name}-{digest}'
+
+    # replace special characters
+    if has_special_symbols:
+        for c in _FILENAME_SPECIAL_CHARS:
+            log_file_name = log_file_name.replace(c, '_')
+
+    # and lastly add the extension
+    return log_file_name + '.log.jsonl'
 
 
 class LivelogPlugin:
@@ -187,7 +234,7 @@ class LivelogPlugin:
             if worker_id == 'master':
                 worker_id = 0
             else:
-                assert worker_id.startswith('gw')
+                assert worker_id.startswith('gw'), f"Invalid worker id {worker_id}"
                 worker_id = int(worker_id[len('gw'):])
         else:
             worker_id = 0
@@ -201,7 +248,7 @@ class LivelogPlugin:
         d = {
             "type": report.when,
             "outcome": report.outcome,
-            "test": _hash(report.nodeid),
+            "test": report.nodeid,
         }
 
         if report.outcome == "failed":
@@ -263,13 +310,13 @@ class LivelogPlugin:
                     row_params.intersection_update(set(test_params.keys()))
 
             else:
-                assert False
+                assert False, f"Invalid pytest session item type {type(item)}"
 
             if test_module not in groups:
                 groups[test_module] = []
 
             groups[test_module].append(
-                {"id": _hash(nodeid), "name": test_name, "params": test_params}
+                {"id": nodeid, "log_file": _create_log_name(nodeid), "name": test_name, "params": test_params}
             )
 
         plan = {
@@ -287,11 +334,9 @@ class LivelogPlugin:
         if self._status_file is None:
             return
 
-        assert self._handler is None
+        assert self._handler is None, "pytest_runtest_logstart called before pytest_runtest_logfinish"
 
-        # generate the path name
-        # TODO: if name too long handle it
-        log_file = os.path.join(self._log_path, _hash(nodeid) + ".log.jsonl")
+        log_file = os.path.join(self._log_path, _create_log_name(nodeid))
 
         # open the handler and set it
         self._handler = LivelogLoggingHandler(log_file)
@@ -304,19 +349,19 @@ class LivelogPlugin:
 
         self._worst_outcome = "passed"
 
-        self._status_file.log({"type": "start", "test": _hash(nodeid)})
+        self._status_file.log({"type": "start", "test": nodeid})
 
     def pytest_runtest_logfinish(self, nodeid, location):
         if self._status_file is None:
             return
 
         self._status_file.log(
-            {"type": "finish", "outcome": self._worst_outcome, "test": _hash(nodeid)}
+            {"type": "finish", "outcome": self._worst_outcome, "test": nodeid}
         )
 
         # we can remove the handler and close it
         # since no one should be using it anymore
-        assert self._handler is not None
+        assert self._handler is not None, "pytest_runtest_logfinish called before pytest_runtest_logstart"
         logging.getLogger().removeHandler(self._handler)
         self._handler = None
 
@@ -402,8 +447,8 @@ class LivelogPlugin:
         return True
 
     @pytest.fixture
-    def log_progress(self, request: pytest.FixtureRequest):
-        return ProgressLogger(self._status_file, _hash(request.node.nodeid))
+    def live_progress(self, request: pytest.FixtureRequest):
+        return ProgressLogger(self._status_file, request.node.nodeid)
 
 
 def pytest_configure(config):
