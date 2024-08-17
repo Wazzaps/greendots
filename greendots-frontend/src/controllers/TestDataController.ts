@@ -292,6 +292,7 @@ export type ExceptionData = {
   id: string;
   text: string;
   long_text: string;
+  color: string;
   count: number;
 };
 export type ExceptionMap = { [id: string]: ExceptionData };
@@ -600,6 +601,7 @@ export class TestDataProcessor {
               text: test.exception!,
               // Also store (one of the) the full exception texts
               long_text: (status_update as any).exception,
+              color: test.ex_color!,
               count: 1
             };
           } else {

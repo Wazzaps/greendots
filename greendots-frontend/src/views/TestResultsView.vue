@@ -112,6 +112,7 @@ onUnmounted(() => {
 
 // --- Exceptions ---
 const sidebar_open = ref(false);
+const hovered_ex_id = ref<string | null>(null);
 const show_full_exceptions = ref(localStorage.getItem('show_full_exceptions') === 'true');
 function toggleSidebar() {
   sidebar_open.value = !sidebar_open.value;
@@ -165,8 +166,11 @@ function renderCanvas(_time: number) {
   for (const test of plan.value.test_items) {
     const x = (test.col_idx + 0.5) * cell_size;
     const y = (test.row_idx + 0.5) * cell_size;
+    const not_hovered_ex = hovered_ex_id.value && hovered_ex_id.value != test.ex;
     const my_cell_radius =
-      sidebar_open.value && test.status != 'fail' ? small_cell_radius : cell_radius;
+      sidebar_open.value && (test.status != 'fail' || not_hovered_ex)
+        ? small_cell_radius
+        : cell_radius;
     let color = cell_colors[test.status] || cell_colors['pending'];
     if (test.status == 'fail' && sidebar_open.value) {
       color = test.ex_color || color;
@@ -297,11 +301,15 @@ function handleCanvasPointerMove(e: MouseEvent) {
     hovered_test.value = test;
     mouse_pos_x.value = e.clientX;
     mouse_pos_y.value = e.clientY;
+    if (hovered_test.value.ex) {
+      hovered_ex_id.value = hovered_test.value.ex;
+    }
   } else {
     canvas.value!.style.cursor = '';
     hovered_test.value = null;
     mouse_pos_x.value = 0;
     mouse_pos_y.value = 0;
+    hovered_ex_id.value = null;
   }
   if (test) {
     highlighted_row.value = test.row_idx;
@@ -325,6 +333,7 @@ function handleCanvasPointerLeave() {
   }
   popup_shown.value = false;
   popup_preloading.value = false;
+  hovered_ex_id.value = null;
 }
 
 function requestRenderCanvas() {
@@ -335,7 +344,7 @@ function requestRenderCanvas() {
 }
 
 const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 30, { maxWait: 100 });
-watch([plan, canvas, sidebar_open], requestRenderCanvasDebounced, { deep: true });
+watch([plan, canvas, sidebar_open, hovered_ex_id], requestRenderCanvasDebounced, { deep: true });
 
 // --- Header resizers ---
 const height_resizer = makeResizer(
@@ -468,9 +477,18 @@ onMounted(() => {
         ></label
       >
     </div>
-    <ul class="exception-list">
-      <li class="exception" v-for="ex in exception_list" :key="ex.id">
-        <span class="exception-count" :title="`This exception appeared ${ex.count} time(s)`"
+    <ul class="exception-list" @mouseleave="hovered_ex_id = null">
+      <li
+        class="exception"
+        v-for="ex in exception_list"
+        :key="ex.id"
+        :class="{ hovered: hovered_ex_id == ex.id }"
+        @mouseenter="hovered_ex_id = ex.id"
+      >
+        <span
+          class="exception-count"
+          :title="`This exception appeared ${ex.count} time(s)`"
+          :style="{ color: ex.color }"
           >[{{ ex.count }}]</span
         >
         <a
@@ -746,8 +764,9 @@ nav > div {
 .exception:nth-child(odd) {
   background: #1e1e1e;
 }
-.exception:hover {
-  background: #2e2e2e;
+.exception:hover,
+.exception.hovered {
+  background: #313131;
 }
 .exception > span,
 .exception > a {
@@ -768,7 +787,6 @@ nav > div {
 }
 .exception-count {
   margin-left: 3px;
-  color: #aaa;
   font-size: 12px;
 }
 .exception > pre {
