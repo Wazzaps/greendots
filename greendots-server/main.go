@@ -25,7 +25,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.5.0"
+const VERSION = "0.6.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -363,7 +363,7 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read all status files, save the last line per test
-	final_statuses := make(map[string]interface{})
+	final_statuses := make(map[string]map[string]interface{})
 	for status_idx := range plan.WorkerCount {
 		statusSummaryPath := filepath.Join(
 			config.ProjectsDir, project, run,
@@ -392,7 +392,14 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Store the final status of each test
-			final_statuses[status_obj["test"].(string)] = status_obj
+			key := status_obj["test"].(string)
+			if prev_status, ok := final_statuses[key]; ok {
+				prev_exc := prev_status["exception"]
+				if prev_exc != nil && status_obj["exception"] == nil {
+					status_obj["exception"] = prev_exc
+				}
+			}
+			final_statuses[key] = status_obj
 			// Keep a counter for the offset
 			final_offset += len(line) + 1
 		}

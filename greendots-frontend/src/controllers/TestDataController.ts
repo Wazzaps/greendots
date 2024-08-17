@@ -1,3 +1,4 @@
+import { cyrb53_base36_6chars, cyrb53_color } from '@/utils/str_hash';
 import memoPromise from './memoPromise';
 
 export type Project = {
@@ -235,8 +236,20 @@ export type TestStatusUpdateEvent =
       type: 'setup' | 'call' | 'teardown' | 'finish';
       outcome: 'passed' | 'failed' | 'error' | 'skipped';
       test: string;
+      exception?: string;
     };
 
+// Keep this list in sync with the fields in `TestItem`
+export const TEST_ITEM_FILTERABLE_FIELDS = [
+  'id',
+  'group',
+  'name',
+  'params',
+  'status',
+  'progress',
+  'exception',
+  'ex'
+];
 export type TestItem = {
   id: string;
   group: string;
@@ -244,11 +257,18 @@ export type TestItem = {
   params: { [param: string]: string };
 
   shown: boolean;
+  // pre-filter
+  _row_idx: number;
+  _col_idx: number;
+  // post-filter
   row_idx: number;
   col_idx: number;
   // TODO: Rename to be closer to `outcome`
   status: 'pending' | 'progress' | 'success' | 'fail' | 'skip';
   progress: number;
+  exception?: string;
+  ex?: string; // A short hash of the exception
+  ex_color?: string; // A color derived from the exception hash
 };
 
 export type Row = {
@@ -267,10 +287,14 @@ export type TestGroup = {
   name: string;
   start: number;
   end: number;
-
-  shown: boolean;
-  _shown_tests: number; // Number of tests shown in this group
 };
+export type ExceptionData = {
+  id: string;
+  text: string;
+  long_text: string;
+  count: number;
+};
+export type ExceptionMap = { [id: string]: ExceptionData };
 
 export type ProcessedPlan = {
   id: number;
@@ -286,6 +310,7 @@ export type TestDataProcessorEvent =
   | { type: 'reset' }
   | ({ type: 'plan' } & ProcessedPlan)
   | { type: 'status_update'; test_idx: number }
+  | { type: 'exception_list'; exceptions: ExceptionMap }
   | { type: 'surprise' };
 
 export class TestDataProcessor {
@@ -296,9 +321,10 @@ export class TestDataProcessor {
 
   // State
   private plan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
+  private filteredPlan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
   private successes_left_for_surprise: number | null = null;
   private seen_whole_summary = false;
-  // private exceptions: Array<string> = [];
+  private exceptions: ExceptionMap = {};
   private statusUnsub: (() => void) | null = null;
   private next_plan_id = 0;
 
@@ -312,7 +338,7 @@ export class TestDataProcessor {
     this.unsubscribe();
     this.project = project;
     this.run = run;
-    // this.exceptions = [];
+    this.exceptions = {};
     this.successes_left_for_surprise = null;
     this.seen_whole_summary = false;
 
@@ -324,8 +350,10 @@ export class TestDataProcessor {
       // Arrange test items in a grid
       this.plan = TestDataProcessor.processTestPlan(raw_plan);
       this.plan.id = this.next_plan_id++;
+      this.filteredPlan = this.plan;
+      this.calculateTestGroups();
       this.applyFilter();
-      this.callback(this.plan);
+      this.callback(this.filteredPlan!);
 
       this.statusUnsub = this.fetcher.subscribeTestStatusUpdates(
         project,
@@ -337,7 +365,9 @@ export class TestDataProcessor {
 
   public setFilter(filter: null | ((_: TestItem) => boolean)) {
     this.filter = filter;
-    this.applyFilter();
+    if (this.applyFilter()) {
+      this.callback(this.filteredPlan!);
+    }
   }
 
   public unsubscribe() {
@@ -345,22 +375,32 @@ export class TestDataProcessor {
     this.statusUnsub = null;
   }
 
-  private applyFilter(test_list?: TestItem[]) {
+  private applyFilter(test_list?: TestItem[]): boolean {
+    let changed = false;
     if (this.plan) {
-      let changed = false;
       for (const test of test_list || this.plan.test_items) {
         const prev_shown = test.shown;
         test.shown = this.filter ? this.filter(test) : true;
         if (prev_shown != test.shown) {
           // console.log('test.shown changed:', test);
           changed = true;
-          this.plan.rows[test.row_idx]._shown_tests += test.shown ? 1 : -1;
-          this.plan.cols[test.col_idx]._shown_tests += test.shown ? 1 : -1;
-          this.plan.test_groups.forEach((group) => {
-            if (test.group == group.name) {
-              group._shown_tests += test.shown ? 1 : -1;
-            }
-          });
+          // console.log('row', test._row_idx, 'col', test._col_idx, 'delta', test.shown ? 1 : -1);
+          const row = this.plan.rows[test._row_idx];
+          const col = this.plan.cols[test._col_idx];
+          row._shown_tests += test.shown ? 1 : -1;
+          col._shown_tests += test.shown ? 1 : -1;
+          if (row._shown_tests < 0) {
+            console.error(
+              `Test filtering broken, row#${test._row_idx} has negative shown test count: ${row._shown_tests}`,
+              this.plan
+            );
+          }
+          if (col._shown_tests < 0) {
+            console.error(
+              `Test filtering broken, col#${test._col_idx} has negative shown test count: ${col._shown_tests}`,
+              this.plan
+            );
+          }
         }
       }
       for (const row of this.plan.rows) {
@@ -379,18 +419,59 @@ export class TestDataProcessor {
           changed = true;
         }
       }
-      for (const group of this.plan.test_groups) {
-        const prev_shown = group.shown;
-        group.shown = group._shown_tests > 0;
-        if (prev_shown != group.shown) {
-          // console.log('group.shown changed:', group);
-          changed = true;
-        }
-      }
       if (changed) {
         console.log('Filter results changed, notifying component');
-        this.callback(this.plan);
+        this.filteredPlan = this.plan;
+        const row_idx_map: Map<number, number> = new Map();
+        const col_idx_map: Map<number, number> = new Map();
+        this.filteredPlan = {
+          type: 'plan',
+          id: this.next_plan_id++,
+          test_id_to_test_idx: {},
+          rows: filter_and_make_idx_map(this.plan.rows, (row) => row.shown, row_idx_map),
+          cols: filter_and_make_idx_map(this.plan.cols, (col) => col.shown, col_idx_map),
+          test_items: this.plan.test_items.filter((test) => test.shown),
+          test_groups: [],
+          row_params: this.plan.row_params
+        };
+        for (const [idx, test] of this.plan.test_items.entries()) {
+          if (test.shown) {
+            test.row_idx = row_idx_map.get(test._row_idx)!;
+            test.col_idx = col_idx_map.get(test._col_idx)!;
+            this.filteredPlan.test_id_to_test_idx[test.id] = idx;
+          }
+        }
+        this.calculateTestGroups();
       }
+    } else {
+      this.filteredPlan = null;
+    }
+    return changed;
+  }
+
+  private calculateTestGroups() {
+    if (this.filteredPlan == null) {
+      return;
+    }
+    let current_group = this.filteredPlan.cols[0]?.params.group;
+    let group_start = 0;
+    for (const [idx, col] of this.filteredPlan.cols.entries()) {
+      if (col.params.group !== current_group) {
+        this.filteredPlan.test_groups.push({
+          name: current_group,
+          start: group_start,
+          end: idx
+        });
+        current_group = col.params.group;
+        group_start = idx;
+      }
+    }
+    if (this.filteredPlan.cols.length > 0) {
+      this.filteredPlan.test_groups.push({
+        name: current_group,
+        start: group_start,
+        end: this.filteredPlan.cols.length
+      });
     }
   }
 
@@ -401,10 +482,8 @@ export class TestDataProcessor {
     const cols_json = [];
     const test_items: TestItem[] = [];
     const test_id_to_test_idx: { [_: string]: number } = {};
-    const test_groups: TestGroup[] = [];
     for (const group_name in raw_plan.groups) {
       const group = raw_plan.groups[group_name];
-      const group_start_idx = cols.length;
       for (const test of group) {
         const row_data: { [_: string]: string } = {};
         const col_data: { [_: string]: string } = {
@@ -452,20 +531,14 @@ export class TestDataProcessor {
           params: test.params,
 
           shown: true,
+          _row_idx: row_idx,
+          _col_idx: col_idx,
           row_idx,
           col_idx,
           status: 'pending',
           progress: 0
         });
       }
-      const group_end_idx = cols.length;
-      test_groups.push({
-        name: group_name,
-        start: group_start_idx,
-        end: group_end_idx,
-        shown: true,
-        _shown_tests: group.length
-      });
     }
 
     return {
@@ -475,7 +548,7 @@ export class TestDataProcessor {
       test_id_to_test_idx,
       rows,
       cols,
-      test_groups,
+      test_groups: [], // To be filled by filter logic
       row_params: raw_plan.row_params
     };
   }
@@ -497,12 +570,48 @@ export class TestDataProcessor {
           }
         }
         this.successes_left_for_surprise = new_successes_left_for_surprise;
-        this.applyFilter();
-      } else if (status_update.outcome == 'failed' || status_update.outcome == 'error') {
-        // TODO: Collect exceptions
+        if (this.applyFilter()) {
+          this.callback(this.filteredPlan!);
+        }
+      } else if (
+        (status_update as any).outcome == 'failed' ||
+        (status_update as any).outcome == 'error'
+      ) {
         test.status = 'fail';
         test.progress = 1;
-      } else if (status_update.outcome == 'skipped') {
+        // TODO: Do we want the whole exception or just the last line?
+        const new_exception = (status_update as any).exception as string | undefined;
+        test.exception = new_exception ? new_exception.split('\n').pop()?.trim() : undefined;
+
+        let ex_changed = false;
+        if (test.ex !== undefined) {
+          this.exceptions[test.ex].count -= 1;
+          if (this.exceptions[test.ex].count == 0) {
+            delete this.exceptions[test.ex];
+          }
+          ex_changed = true;
+        }
+        test.ex = test.exception ? cyrb53_base36_6chars(test.exception) : undefined;
+        test.ex_color = test.ex ? cyrb53_color(test.ex) : undefined;
+        if (test.ex) {
+          if (this.exceptions[test.ex] === undefined) {
+            this.exceptions[test.ex] = {
+              id: test.ex,
+              text: test.exception!,
+              // Also store (one of the) the full exception texts
+              long_text: (status_update as any).exception,
+              count: 1
+            };
+          } else {
+            this.exceptions[test.ex].count += 1;
+          }
+          ex_changed = true;
+        }
+
+        if (ex_changed) {
+          this.callback({ type: 'exception_list', exceptions: this.exceptions });
+        }
+      } else if ((status_update as any).outcome == 'skipped') {
         test.status = 'skip';
         test.progress = 1;
       } else if (status_update.type == 'setup' || status_update.type == 'start') {
@@ -547,4 +656,19 @@ export class TestDataProcessor {
       }
     }
   }
+}
+
+function filter_and_make_idx_map<T>(
+  items: Array<T>,
+  filter: (item: T) => boolean,
+  out_idx_map: Map<number, number>
+): Array<T> {
+  const filtered_items = [];
+  for (const [idx, item] of items.entries()) {
+    if (filter(item)) {
+      out_idx_map.set(idx, filtered_items.length);
+      filtered_items.push(item);
+    }
+  }
+  return filtered_items;
 }
