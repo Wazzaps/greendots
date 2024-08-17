@@ -255,7 +255,9 @@ function handleCanvasPointerDown(e: MouseEvent) {
 function handleCanvasPointerUp(e: MouseEvent) {
   const [test, inside_circle] = canvasGetRelevantTest(e);
   if (test && inside_circle && test_item_pointer_down.value?.id == test.id) {
-    if (e.ctrlKey) {
+    if (e.altKey) {
+      filter_string.value = `status:${test.status}`;
+    } else if (e.ctrlKey) {
       window.open(
         `/${encodeURIComponent(route.params.project)}/${encodeURIComponent(route.params.run)}/${encodeURIComponent(test.id)}/`
       );

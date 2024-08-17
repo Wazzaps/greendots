@@ -27,6 +27,8 @@ export function liqe_to_expr(query: LiqeQuery): string {
       }
     case 'ParenthesizedExpression':
       return `(${liqe_to_expr(query.expression)})`;
+    case 'EmptyExpression':
+      return 'true';
     case 'Tag':
       switch (query.operator?.operator) {
         case undefined:
