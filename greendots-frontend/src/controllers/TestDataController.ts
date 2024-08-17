@@ -1,4 +1,4 @@
-import { cyrb53_base36_6chars } from '@/utils/str_hash';
+import { cyrb53_base36_6chars, cyrb53_color } from '@/utils/str_hash';
 import memoPromise from './memoPromise';
 
 export type Project = {
@@ -239,6 +239,17 @@ export type TestStatusUpdateEvent =
       exception?: string;
     };
 
+// Keep this list in sync with the fields in `TestItem`
+export const TEST_ITEM_FILTERABLE_FIELDS = [
+  'id',
+  'group',
+  'name',
+  'params',
+  'status',
+  'progress',
+  'exception',
+  'ex'
+];
 export type TestItem = {
   id: string;
   group: string;
@@ -257,6 +268,7 @@ export type TestItem = {
   progress: number;
   exception?: string;
   ex?: string; // A short hash of the exception
+  ex_color?: string; // A color derived from the exception hash
 };
 
 export type Row = {
@@ -276,6 +288,13 @@ export type TestGroup = {
   start: number;
   end: number;
 };
+export type ExceptionData = {
+  id: string;
+  text: string;
+  long_text: string;
+  count: number;
+};
+export type ExceptionMap = { [id: string]: ExceptionData };
 
 export type ProcessedPlan = {
   id: number;
@@ -291,7 +310,7 @@ export type TestDataProcessorEvent =
   | { type: 'reset' }
   | ({ type: 'plan' } & ProcessedPlan)
   | { type: 'status_update'; test_idx: number }
-  | { type: 'exception_list'; exceptions: string[] }
+  | { type: 'exception_list'; exceptions: ExceptionMap }
   | { type: 'surprise' };
 
 export class TestDataProcessor {
@@ -305,7 +324,7 @@ export class TestDataProcessor {
   private filteredPlan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
   private successes_left_for_surprise: number | null = null;
   private seen_whole_summary = false;
-  // private exceptions: Array<string> = [];
+  private exceptions: ExceptionMap = {};
   private statusUnsub: (() => void) | null = null;
   private next_plan_id = 0;
 
@@ -319,7 +338,7 @@ export class TestDataProcessor {
     this.unsubscribe();
     this.project = project;
     this.run = run;
-    // this.exceptions = [];
+    this.exceptions = {};
     this.successes_left_for_surprise = null;
     this.seen_whole_summary = false;
 
@@ -365,8 +384,23 @@ export class TestDataProcessor {
         if (prev_shown != test.shown) {
           // console.log('test.shown changed:', test);
           changed = true;
-          this.plan.rows[test._row_idx]._shown_tests += test.shown ? 1 : -1;
-          this.plan.cols[test._col_idx]._shown_tests += test.shown ? 1 : -1;
+          // console.log('row', test._row_idx, 'col', test._col_idx, 'delta', test.shown ? 1 : -1);
+          const row = this.plan.rows[test._row_idx];
+          const col = this.plan.cols[test._col_idx];
+          row._shown_tests += test.shown ? 1 : -1;
+          col._shown_tests += test.shown ? 1 : -1;
+          if (row._shown_tests < 0) {
+            console.error(
+              `Test filtering broken, row#${test._row_idx} has negative shown test count: ${row._shown_tests}`,
+              this.plan
+            );
+          }
+          if (col._shown_tests < 0) {
+            console.error(
+              `Test filtering broken, col#${test._col_idx} has negative shown test count: ${col._shown_tests}`,
+              this.plan
+            );
+          }
         }
       }
       for (const row of this.plan.rows) {
@@ -441,7 +475,6 @@ export class TestDataProcessor {
     }
   }
 
-  // /thing/ -params.arch:arm NOT (test_thing_1 params.arch:x86)
   private static processTestPlan(raw_plan: RunPlan): TestDataProcessorEvent & ProcessedPlan {
     const rows: Row[] = [];
     const rows_json = [];
@@ -546,8 +579,38 @@ export class TestDataProcessor {
       ) {
         test.status = 'fail';
         test.progress = 1;
-        test.exception = (status_update as any).exception;
+        // TODO: Do we want the whole exception or just the last line?
+        const new_exception = (status_update as any).exception as string | undefined;
+        test.exception = new_exception ? new_exception.split('\n').pop()?.trim() : undefined;
+
+        let ex_changed = false;
+        if (test.ex !== undefined) {
+          this.exceptions[test.ex].count -= 1;
+          if (this.exceptions[test.ex].count == 0) {
+            delete this.exceptions[test.ex];
+          }
+          ex_changed = true;
+        }
         test.ex = test.exception ? cyrb53_base36_6chars(test.exception) : undefined;
+        test.ex_color = test.ex ? cyrb53_color(test.ex) : undefined;
+        if (test.ex) {
+          if (this.exceptions[test.ex] === undefined) {
+            this.exceptions[test.ex] = {
+              id: test.ex,
+              text: test.exception!,
+              // Also store (one of the) the full exception texts
+              long_text: (status_update as any).exception,
+              count: 1
+            };
+          } else {
+            this.exceptions[test.ex].count += 1;
+          }
+          ex_changed = true;
+        }
+
+        if (ex_changed) {
+          this.callback({ type: 'exception_list', exceptions: this.exceptions });
+        }
       } else if ((status_update as any).outcome == 'skipped') {
         test.status = 'skip';
         test.progress = 1;

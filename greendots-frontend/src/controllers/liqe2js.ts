@@ -1,8 +1,8 @@
 import type { FieldToken, ImplicitFieldToken, LiqeQuery } from '@/utils/liqe-vendored/types';
+import { TEST_ITEM_FILTERABLE_FIELDS } from './TestDataController';
 
 export function liqe_to_function(query: LiqeQuery): (obj: any) => boolean {
   const expr = liqe_to_expr(query);
-  console.log(expr);
   return new Function('obj', `return ${expr}`) as (obj: any) => boolean;
 }
 
@@ -36,6 +36,9 @@ export function liqe_to_expr(query: LiqeQuery): string {
             case 'LiteralExpression':
               return `(${field} == ${JSON.stringify(query.expression.value)})`;
             case 'RegexExpression':
+              if (query.expression.value.startsWith('//')) {
+                return `(!!${field})`;
+              }
               return `${query.expression.value}.test(${field})`;
             case 'EmptyExpression':
               return `(!!${field})`;
@@ -53,7 +56,11 @@ export function liqe_to_expr(query: LiqeQuery): string {
 
 function field_to_js(field: FieldToken | ImplicitFieldToken): string {
   if (field.type === 'Field') {
-    return `obj.${field.name}`;
+    let field_name = field.name;
+    if (!TEST_ITEM_FILTERABLE_FIELDS.some((f) => field_name == f)) {
+      field_name = 'params.' + field_name;
+    }
+    return `obj.${field_name}`;
   } else {
     // TODO: replace with "search in all fields"
     return `obj.name`;

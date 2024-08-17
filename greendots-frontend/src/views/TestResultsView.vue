@@ -3,6 +3,8 @@ import {
   TestDataFetcher,
   TestDataProcessor,
   type Col,
+  type ExceptionData,
+  type ExceptionMap,
   type ProcessedPlan,
   type TestItem
 } from '@/controllers/TestDataController';
@@ -27,6 +29,7 @@ const is_plan_loading = ref(true);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const x_height = ref(parseInt(localStorage.getItem('test_results_headers_height')!) || 150);
 const y_width = ref(parseInt(localStorage.getItem('test_results_headers_width')!) || 150);
+const sidebar_width = ref(parseInt(localStorage.getItem('test_results_sidebar_width')!) || 300);
 
 // --- Test plan ---
 const plan = shallowRef<ProcessedPlan | null>(null);
@@ -46,6 +49,9 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
     case 'status_update':
       requestRenderCanvasDebounced();
       break;
+    case 'exception_list':
+      refreshExceptionsDebounced(event.exceptions);
+      break;
     case 'surprise':
       console.log('All tests passed, confetti time!');
       makeConfetti();
@@ -54,6 +60,8 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
 });
 
 // --- Filtering ---
+// Example query:
+//   /thing/ -arch:arm NOT (test_thing_1 arch:x86)
 const filter_string = ref('');
 const filter_string_error = ref(false);
 const parsed_filter = ref<LiqeQuery | null>(null);
@@ -76,9 +84,48 @@ effect(() => {
   test_data_processor.setTestRun(route.params.project as string, route.params.run as string);
 });
 
+function filterForException(ex_id: string) {
+  filter_string.value = `ex:"${ex_id}"`;
+}
+
+function keydown(e: KeyboardEvent) {
+  if (e.key === 'k' && e.ctrlKey) {
+    e.preventDefault();
+    const input = document.querySelector('.filter-input') as HTMLInputElement;
+    input.focus();
+    input.select();
+  }
+  if (e.key === 'e' && e.ctrlKey) {
+    e.preventDefault();
+    sidebar_open.value = !sidebar_open.value;
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', keydown);
+});
+
 onUnmounted(() => {
   test_data_processor.unsubscribe();
+  document.removeEventListener('keydown', keydown);
 });
+
+// --- Exceptions ---
+const sidebar_open = ref(false);
+const show_full_exceptions = ref(localStorage.getItem('show_full_exceptions') === 'true');
+function toggleSidebar() {
+  sidebar_open.value = !sidebar_open.value;
+}
+function setShowFullExceptions(val: boolean) {
+  show_full_exceptions.value = val;
+  localStorage.setItem('show_full_exceptions', val.toString());
+}
+const exception_list = shallowRef<ExceptionData[]>([]);
+function refreshExceptions(ex_list: ExceptionMap) {
+  exception_list.value = Object.values(ex_list);
+  exception_list.value.sort((a, b) => a.id.localeCompare(b.id));
+}
+const refreshExceptionsDebounced = debounce(refreshExceptions, 100, { maxWait: 300 });
 
 // --- Canvas rendering & input management ---
 let rerender_scheduled = false;
@@ -90,6 +137,7 @@ function renderCanvas(_time: number) {
   const ctx: CanvasRenderingContext2D = canvas.value.getContext('2d')!;
   const cell_size = 22;
   const cell_radius = 8;
+  const small_cell_radius = 3;
   const cell_progress_width = 2;
   const cell_colors = {
     success: '#90db8a',
@@ -117,11 +165,16 @@ function renderCanvas(_time: number) {
   for (const test of plan.value.test_items) {
     const x = (test.col_idx + 0.5) * cell_size;
     const y = (test.row_idx + 0.5) * cell_size;
-    const color = cell_colors[test.status] || cell_colors['pending'];
+    const my_cell_radius =
+      sidebar_open.value && test.status != 'fail' ? small_cell_radius : cell_radius;
+    let color = cell_colors[test.status] || cell_colors['pending'];
+    if (test.status == 'fail' && sidebar_open.value) {
+      color = test.ex_color || color;
+    }
     ctx.fillStyle = color;
 
     ctx.beginPath();
-    ctx.arc(x, y, cell_radius, 0, 2 * Math.PI);
+    ctx.arc(x, y, my_cell_radius, 0, 2 * Math.PI);
     ctx.fill();
     if (test.status == 'progress') {
       ctx.strokeStyle = cell_colors.progress_stroke;
@@ -129,13 +182,13 @@ function renderCanvas(_time: number) {
       ctx.lineWidth = cell_progress_width;
       ctx.beginPath();
       ctx.moveTo(x, y);
-      ctx.lineTo(x, y - cell_radius);
-      ctx.arc(x, y, cell_radius, -0.5 * Math.PI, (1.5 - 2 * test.progress) * Math.PI, true);
+      ctx.lineTo(x, y - my_cell_radius);
+      ctx.arc(x, y, my_cell_radius, -0.5 * Math.PI, (1.5 - 2 * test.progress) * Math.PI, true);
       ctx.lineTo(x, y);
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(x, y, cell_radius - cell_progress_width / 2, 0, 2 * Math.PI);
+      ctx.arc(x, y, my_cell_radius - cell_progress_width / 2, 0, 2 * Math.PI);
       ctx.stroke();
     }
   }
@@ -280,7 +333,7 @@ function requestRenderCanvas() {
 }
 
 const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 30, { maxWait: 100 });
-watch([plan, canvas], requestRenderCanvasDebounced, { deep: true });
+watch([plan, canvas, sidebar_open], requestRenderCanvasDebounced, { deep: true });
 
 // --- Header resizers ---
 const height_resizer = makeResizer(
@@ -294,6 +347,12 @@ const width_resizer = makeResizer(
   (e) => e.clientX,
   () => window.innerWidth,
   'test_results_headers_width'
+);
+const sidebar_width_resizer = makeResizer(
+  sidebar_width,
+  (e) => window.innerWidth - e.clientX,
+  () => window.innerWidth,
+  'test_results_sidebar_width'
 );
 
 // --- Helpers ---
@@ -319,30 +378,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <nav>
-    <div>
-      <span class="project-name">{{ $route.params.project }}</span>
-      <span class="run-name">{{ $route.params.run }}</span>
-    </div>
-    <input
-      type="text"
-      class="filter-input"
-      :class="{ error: filter_string_error }"
-      v-model="filter_string"
-      placeholder="Filter..."
-    />
-    <div></div>
-    <!-- <span>TODO:Search</span>
-    <span>TODO:Statistics</span>
-    <span>TODO:Settings</span> -->
-  </nav>
   <main
     class="results-container"
     :style="{
       '--x-height': x_height + 'px',
       '--y-width': y_width + 'px',
-      '--col-count': plan!.cols.length,
-      '--row-count': plan!.rows.length
+      '--col-count': Math.max(1, plan!.cols.length),
+      '--row-count': Math.max(1, plan!.rows.length),
+      '--sidebar-spacing': sidebar_open ? sidebar_width + 100 + 'px' : '0'
     }"
     v-if="!is_plan_loading"
   >
@@ -405,8 +448,74 @@ onMounted(() => {
     </div>
     <div class="height-resizer" @pointerdown="height_resizer.begin_resize"></div>
     <div class="width-resizer" @pointerdown="width_resizer.begin_resize"></div>
+    <!-- This element expands the grid so all content is visible under the sidebar -->
+    <div class="grid-filler"></div>
   </main>
   <main class="loading-msg" v-else>Loading...</main>
+  <aside class="sidebar" :style="{ width: sidebar_width + 'px' }" v-if="sidebar_open">
+    <div class="sidebar-settings">
+      <label
+        ><input
+          type="checkbox"
+          @change="(e) => setShowFullExceptions((e.target! as HTMLInputElement).checked)"
+          :checked="show_full_exceptions"
+        />Show full exceptions
+        <abbr
+          title="Since exceptions are grouped by their last line, this is a randomly selected exception in this group"
+          >(?)</abbr
+        ></label
+      >
+    </div>
+    <ul class="exception-list">
+      <li class="exception" v-for="ex in exception_list" :key="ex.id">
+        <span class="exception-count" :title="`This exception appeared ${ex.count} time(s)`"
+          >[{{ ex.count }}]</span
+        >
+        <a
+          class="exception-id"
+          title="The exception ID (hash of the last line). Click to filter."
+          href="javascript:"
+          tabindex="0"
+          @click="filterForException(ex.id)"
+          >{{ ex.id }}</a
+        >
+        <pre :title="ex.long_text">{{ show_full_exceptions ? ex.long_text : ex.text }}</pre>
+      </li>
+    </ul>
+    <div class="no-exceptions-notice" v-if="exception_list.length == 0">
+      No exceptions reported yet.
+    </div>
+  </aside>
+  <div
+    class="sidebar-width-resizer"
+    :style="{ right: sidebar_width - 4 + 'px' }"
+    @pointerdown="sidebar_width_resizer.begin_resize"
+  ></div>
+  <nav>
+    <div>
+      <span class="project-name">{{ $route.params.project }}</span>
+      <span class="run-name">{{ $route.params.run }}</span>
+    </div>
+    <input
+      type="text"
+      class="filter-input"
+      :class="{ error: filter_string_error }"
+      v-model="filter_string"
+      placeholder="Filter [Ctrl K]"
+    />
+    <div>
+      <button
+        @click="toggleSidebar"
+        class="sidebar-toggle"
+        title="Toggle Exception List [Ctrl E]"
+        :class="{ activated: sidebar_open }"
+      >
+        <img src="@/assets/bug.svg" />
+      </button>
+    </div>
+    <!-- <span>TODO:Statistics</span>
+    <span>TODO:Settings</span> -->
+  </nav>
   <div
     class="test-hover-popup"
     :style="{
@@ -449,6 +558,7 @@ nav {
   font-size: 18px;
   z-index: 100;
   padding: 0 32px;
+  box-shadow: 0 0 16px rgba(18, 18, 18, 0.6);
 }
 nav a {
   color: #aeaeae;
@@ -464,9 +574,13 @@ nav > div {
 }
 .results-container {
   display: grid;
-  grid-template-columns: var(--y-width) 6px repeat(var(--col-count), 22px);
+  grid-template-columns: var(--y-width) 6px repeat(var(--col-count), 22px) var(--sidebar-spacing);
   grid-template-rows: var(--x-height) 16px repeat(var(--row-count), 22px);
   padding: 32px 16px 16px;
+}
+.grid-filler {
+  grid-row: 1;
+  grid-column: calc(var(--col-count) + 3);
 }
 .results-canvas {
   grid-row: 3 / span calc(var(--row-count) + 2);
@@ -521,7 +635,7 @@ nav > div {
   user-select: none;
   background: #111;
   border-radius: 8px;
-  z-index: 101;
+  z-index: 102;
 }
 .test-hover-popup > div {
   display: flex;
@@ -550,9 +664,19 @@ nav > div {
   grid-column: 2;
   transition: background 0.2s;
 }
-.width-resizer:hover {
+.width-resizer:hover,
+.sidebar-width-resizer:hover {
   cursor: ew-resize;
   background: rgba(255, 255, 255, 0.3);
+}
+.sidebar-width-resizer {
+  background: rgba(255, 255, 255, 0);
+  position: fixed;
+  top: 32px;
+  bottom: 0;
+  width: 8px;
+  transition: background 0.2s;
+  z-index: 101;
 }
 .test-group {
   display: flex;
@@ -571,10 +695,10 @@ nav > div {
   margin: 3px;
 }
 .filter-input {
-  width: 600px;
+  width: 500px;
   font-size: 15px;
   background: #1a1a1a;
-  font-family: 'Exo 2 Variable', sans-serif;
+  font-family: 'Ubuntu Mono', monospace, sans-serif;
   color: #fff;
   border: 1px solid #333;
   padding: 2px 6px;
@@ -583,6 +707,104 @@ nav > div {
 }
 .filter-input.error {
   background: rgb(98, 53, 53);
+}
+.filter-input::placeholder {
+  text-align: center;
+}
+.sidebar {
+  position: fixed;
+  top: 32px;
+  right: 0;
+  bottom: 0;
+  background: #121212;
+  overflow-x: hidden;
+  overflow-y: auto;
+  z-index: 100;
+}
+.exception-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.no-exceptions-notice,
+.sidebar-settings {
+  padding: 8px;
+}
+.sidebar-settings input {
+  margin-right: 4px;
+}
+.sidebar-settings abbr {
+  color: #aaa;
+}
+.exception {
+  padding: 6px 8px;
+}
+.exception:nth-child(odd) {
+  background: #1e1e1e;
+}
+.exception:hover {
+  background: #2e2e2e;
+}
+.exception > span,
+.exception > a {
+  font-weight: bold;
+  float: right;
+}
+.exception-id {
+  color: #666;
+  font-size: 11px;
+}
+.exception-id:hover {
+  text-decoration: underline;
+  cursor: pointer;
+  color: #aaa;
+}
+.exception-id:active {
+  color: #fff;
+}
+.exception-count {
+  margin-left: 3px;
+  color: #aaa;
+  font-size: 12px;
+}
+.exception > pre {
+  white-space: pre-wrap;
+  font-size: 13px;
+  color: #fff;
+}
+.sidebar-toggle {
+  background: transparent;
+  border: none;
+  width: 60px;
+  opacity: 0.4;
+  transition: opacity 0.2s;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.sidebar-toggle:hover {
+  opacity: 0.6;
+}
+.sidebar-toggle img {
+  height: 100%;
+}
+.sidebar-toggle * {
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -o-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  -khtml-user-drag: none;
+  -moz-user-drag: none;
+  -o-user-drag: none;
+  user-drag: none;
+}
+.sidebar-toggle.activated {
+  opacity: 1;
 }
 </style>
 <style>
