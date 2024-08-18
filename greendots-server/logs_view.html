@@ -127,6 +127,9 @@
             window.parent.postMessage("close-logs-view", "*");
           }
         });
+
+        // Notify the parent window that the logs view has loaded, so it can set logger filters
+        window.parent.postMessage("logs-view-loaded", "*");
       }
 
       setInterval(() => {

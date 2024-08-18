@@ -15,6 +15,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -25,7 +26,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.6.0"
+const VERSION = "0.7.0"
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -483,6 +484,8 @@ func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, statusStreamPath)
 }
 
+var LOGGER_NAME_BAD_CHARS = regexp.MustCompile("[^a-zA-Z0-9-_]")
+
 func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) string {
 	html_lines := ""
 	var log_line logLine
@@ -535,8 +538,13 @@ func formatJsonLogLine(json_line []byte, last_date *string, last_time *float64) 
 	}
 
 	html_lines += fmt.Sprintf(
-		"<span class=%s><span class=t>%s </span><span class=s>%s </span><span class=l>%s</span> %s\n</span>",
-		severity_class, ts.Format("15:04:05"), severity, log_line.Name, log_line.Message,
+		"<span class=\"%s l-%s\"><span class=t>%s </span><span class=s>%s </span><span class=l>%s</span> %s\n</span>",
+		severity_class,
+		LOGGER_NAME_BAD_CHARS.ReplaceAllString(log_line.Name, "_"),
+		ts.Format("15:04:05"),
+		severity,
+		log_line.Name,
+		log_line.Message,
 	)
 
 	return html_lines
