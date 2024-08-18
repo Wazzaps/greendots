@@ -26,7 +26,11 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "0.7.0"
+const VERSION = "1.0.0"
+
+//go:generate ./gen_commit_info.sh
+//go:embed commit_info.txt
+var commit_info []byte
 
 //go:embed api-docs.txt
 var apiDocs []byte
@@ -237,7 +241,7 @@ func getFullVersion() string {
 	if ok {
 		build_info_str = fmt.Sprintf("%v", build_info)
 	}
-	return fmt.Sprintf("version\t%s\n%s", VERSION, build_info_str)
+	return fmt.Sprintf("version\t%s\n%s%s", VERSION, build_info_str, commit_info)
 }
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
