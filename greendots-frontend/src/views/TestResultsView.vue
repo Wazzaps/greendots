@@ -381,6 +381,11 @@ function format_col(col: Col) {
     .join(' ');
 }
 
+function copyPytestCmd() {
+  const test_ids = plan.value?.test_items.map((t) => JSON.stringify(t.id)).join(' ');
+  navigator.clipboard.writeText(`pytest ${test_ids}`);
+}
+
 const _window = window;
 
 onMounted(() => {
@@ -523,10 +528,12 @@ onMounted(() => {
       v-model="filter_string"
       placeholder="Filter [Ctrl K]"
     />
-    <div>
+    <div class="right-buttons">
+      <button @click="copyPytestCmd" title="Copy pytest command for shown tests">
+        <img src="@/assets/copy.svg" />
+      </button>
       <button
         @click="toggleSidebar"
-        class="sidebar-toggle"
         title="Toggle Exception List [Ctrl E]"
         :class="{ activated: sidebar_open }"
       >
@@ -587,6 +594,10 @@ nav > div {
   display: flex;
   justify-content: start;
   gap: 1rem;
+}
+.right-buttons {
+  display: flex;
+  gap: 0;
 }
 .loading-msg {
   padding: 48px 32px 32px;
@@ -794,7 +805,7 @@ nav > div {
   font-size: 13px;
   color: #fff;
 }
-.sidebar-toggle {
+.right-buttons > button {
   background: transparent;
   border: none;
   width: 60px;
@@ -805,13 +816,13 @@ nav > div {
   justify-content: center;
   align-items: center;
 }
-.sidebar-toggle:hover {
+.right-buttons > button:hover {
   opacity: 0.6;
 }
-.sidebar-toggle img {
+.right-buttons > button img {
   height: 100%;
 }
-.sidebar-toggle * {
+.right-buttons > button * {
   -webkit-user-select: none;
   -khtml-user-select: none;
   -moz-user-select: none;
@@ -823,7 +834,7 @@ nav > div {
   -o-user-drag: none;
   user-drag: none;
 }
-.sidebar-toggle.activated {
+.right-buttons > button.activated {
   opacity: 1;
 }
 </style>
