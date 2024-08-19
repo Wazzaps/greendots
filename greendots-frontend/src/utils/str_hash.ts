@@ -17,9 +17,3 @@ export function cyrb53(str: string, seed: number = 0) {
 export function cyrb53_base36_6chars(str: string, seed: number = 0) {
   return cyrb53(str, seed).toString(36).slice(0, 6).padStart(6, '0');
 }
-
-export function cyrb53_color(str: string, seed: number = 0) {
-  const hash = cyrb53(str, seed);
-  // Had a fancy calculation here, but a plain random color looked better
-  return '#' + (hash & 0xffffff).toString(16).padStart(6, '0');
-}

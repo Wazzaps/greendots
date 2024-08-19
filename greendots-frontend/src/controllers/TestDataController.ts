@@ -1,4 +1,4 @@
-import { cyrb53_base36_6chars, cyrb53_color } from '@/utils/str_hash';
+import { cyrb53, cyrb53_base36_6chars } from '@/utils/str_hash';
 import memoPromise from './memoPromise';
 
 export type Project = {
@@ -593,7 +593,7 @@ export class TestDataProcessor {
           ex_changed = true;
         }
         test.ex = test.exception ? cyrb53_base36_6chars(test.exception) : undefined;
-        test.ex_color = test.ex ? cyrb53_color(test.ex) : undefined;
+        test.ex_color = test.ex ? ex_hash_color(test.ex) : undefined;
         if (test.ex) {
           if (this.exceptions[test.ex] === undefined) {
             this.exceptions[test.ex] = {
@@ -673,4 +673,16 @@ function filter_and_make_idx_map<T>(
     }
   }
   return filtered_items;
+}
+
+export function ex_hash_color(str: string, seed: number = 0) {
+  const hash = cyrb53(str, seed);
+  // Had a fancy hue-based calculation here, but a plain random color + threshold looked better
+  const r = (hash >> 16) & 0xff;
+  let g = (hash >> 8) & 0xff;
+  const b = hash & 0xff;
+  if (g / r > 1.3 && g / b > 1.3) {
+    g = (g * 0.5) | 0;
+  }
+  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
 }
