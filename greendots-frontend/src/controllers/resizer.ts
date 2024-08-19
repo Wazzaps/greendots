@@ -6,7 +6,7 @@ export function makeResizer(
   distance_ref: Ref<number>,
   axis_extractor: (e: PointerEvent) => number,
   window_size_axis: () => number,
-  local_storage_key: string
+  local_storage_key: () => string
 ) {
   let is_resizing = false;
   let resize_offset = 0;
@@ -14,7 +14,7 @@ export function makeResizer(
     distance_ref.value = Math.floor(
       Math.max(70, Math.min(window_size_axis() * 0.8, axis_extractor(e) + resize_offset))
     );
-    localStorage.setItem(local_storage_key, distance_ref.value.toString());
+    localStorage.setItem(local_storage_key(), distance_ref.value.toString());
   }, 10);
   function begin_resize(e: PointerEvent) {
     if (is_resizing) {

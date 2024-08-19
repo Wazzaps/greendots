@@ -13,11 +13,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { debounce } from 'lodash-es';
 import { makeConfetti } from '@/controllers/confetti';
 import { makeResizer } from '@/controllers/resizer';
-import {
-  parse as liqe_parse,
-  serialize as liqe_serialize,
-  type LiqeQuery
-} from '@/utils/liqe-vendored/Liqe';
+import { parse as liqe_parse, type LiqeQuery } from '@/utils/liqe-vendored/Liqe';
 import { liqe_to_function } from '@/controllers/liqe2js';
 
 const router = useRouter();
@@ -27,9 +23,15 @@ const test_data = inject<TestDataFetcher>('test_data')!;
 const is_plan_loading = ref(true);
 
 const canvas = ref<HTMLCanvasElement | null>(null);
-const x_height = ref(parseInt(localStorage.getItem('test_results_headers_height')!) || 150);
-const y_width = ref(parseInt(localStorage.getItem('test_results_headers_width')!) || 150);
-const sidebar_width = ref(parseInt(localStorage.getItem('test_results_sidebar_width')!) || 300);
+const x_height = ref(
+  parseInt(localStorage.getItem(`proj-${route.params.project}-test_results_headers_height`)!) || 150
+);
+const y_width = ref(
+  parseInt(localStorage.getItem(`proj-${route.params.project}-test_results_headers_width`)!) || 150
+);
+const sidebar_width = ref(
+  parseInt(localStorage.getItem(`proj-${route.params.project}-test_results_sidebar_width`)!) || 300
+);
 
 // --- Test plan ---
 const plan = shallowRef<ProcessedPlan | null>(null);
@@ -263,7 +265,7 @@ function handleCanvasPointerUp(e: MouseEvent) {
       filter_string.value = `status:${test.status}`;
     } else if (e.ctrlKey) {
       window.open(
-        `/${encodeURIComponent(route.params.project)}/${encodeURIComponent(route.params.run)}/${encodeURIComponent(test.id)}/`
+        `/${encodeURIComponent(route.params.project as string)}/${encodeURIComponent(route.params.run as string)}/${encodeURIComponent(test.id)}/`
       );
     } else {
       router.push({
@@ -351,19 +353,19 @@ const height_resizer = makeResizer(
   x_height,
   (e) => e.clientY,
   () => window.innerHeight,
-  'test_results_headers_height'
+  () => `proj-${route.params.project}-test_results_headers_height`
 );
 const width_resizer = makeResizer(
   y_width,
   (e) => e.clientX,
   () => window.innerWidth,
-  'test_results_headers_width'
+  () => `proj-${route.params.project}-test_results_headers_width`
 );
 const sidebar_width_resizer = makeResizer(
   sidebar_width,
   (e) => window.innerWidth - e.clientX,
   () => window.innerWidth,
-  'test_results_sidebar_width'
+  () => `proj-${route.params.project}-test_results_sidebar_width`
 );
 
 // --- Helpers ---
@@ -566,7 +568,7 @@ onMounted(() => {
       </span>
     </div>
     <iframe
-      :src="`/api/v1/projects/${encodeURIComponent($route.params.project)}/runs/${encodeURIComponent($route.params.run)}/test/${encodeURIComponent(hovered_test.id)}/log_tail`"
+      :src="`/api/v1/projects/${encodeURIComponent($route.params.project as string)}/runs/${encodeURIComponent($route.params.run as string)}/test/${encodeURIComponent(hovered_test.id)}/log_tail`"
     ></iframe>
   </div>
 </template>
