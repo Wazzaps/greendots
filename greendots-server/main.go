@@ -112,6 +112,10 @@ type clientTestStatusConfig struct {
 	BackoffJitterMs int `toml:"backoff_jitter_ms" json:"backoff_jitter_ms"`
 }
 
+type cachingConfig struct {
+	PlanCacheMs int `toml:"plan_cache_ms" json:"plan_cache_ms"`
+}
+
 type clientConfig struct {
 	TestStatus clientTestStatusConfig `toml:"test_status" json:"test_status"`
 }
@@ -120,6 +124,7 @@ type greendotsConfig struct {
 	StatusPoll          statusPollConfig    `toml:"status_poll" json:"status_poll"`
 	StatusStream        statusStreamConfig  `toml:"status_stream" json:"status_stream"`
 	LogTail             logTailConfig       `toml:"log_tail" json:"log_tail"`
+	Caching             cachingConfig       `toml:"caching" json:"caching"`
 	Client              clientConfig        `toml:"client" json:"client"`
 	AdditionalLogLevels map[string]logLevel `toml:"additional_log_levels" json:"additional_log_levels"`
 	ProjectsDir         string              `toml:"projects_dir" json:"projects_dir"`
@@ -139,6 +144,9 @@ var config = greendotsConfig{
 	},
 	LogTail: logTailConfig{
 		DefaultLineCount: 25,
+	},
+	Caching: cachingConfig{
+		PlanCacheMs: 60000,
 	},
 	Client: clientConfig{
 		TestStatus: clientTestStatusConfig{
@@ -261,7 +269,7 @@ func getRunPlan(project string, run string) (*runPlan, error) {
 	defer planFd.Close()
 
 	val := runPlanCacheVal{
-		expiresAt: time.Now().Add(1 * time.Minute),
+		expiresAt: time.Now().Add(time.Duration(config.Caching.PlanCacheMs) * time.Millisecond),
 	}
 	err = json.NewDecoder(planFd).Decode(&val.plan)
 	if err != nil {
