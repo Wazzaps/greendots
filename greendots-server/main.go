@@ -229,7 +229,30 @@ func isDirTraversal(path string) bool {
 	return path[:1] == "."
 }
 
+type runPlanCacheKey struct {
+	project string
+	run     string
+}
+type runPlanCacheVal struct {
+	plan      runPlan
+	expiresAt time.Time
+}
+
+var runPlanCache = make(map[runPlanCacheKey]runPlanCacheVal)
+
 func getRunPlan(project string, run string) (*runPlan, error) {
+	// Try the cache first
+	key := runPlanCacheKey{project, run}
+	for key, val := range runPlanCache {
+		if val.expiresAt.Before(time.Now()) {
+			delete(runPlanCache, key)
+		}
+	}
+	if val, ok := runPlanCache[key]; ok {
+		return &val.plan, nil
+	}
+
+	// Read the plan file and cache it
 	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
 	planFd, err := os.Open(planPath)
 	if err != nil {
@@ -237,13 +260,17 @@ func getRunPlan(project string, run string) (*runPlan, error) {
 	}
 	defer planFd.Close()
 
-	var plan runPlan
-	err = json.NewDecoder(planFd).Decode(&plan)
+	val := runPlanCacheVal{
+		expiresAt: time.Now().Add(1 * time.Minute),
+	}
+	err = json.NewDecoder(planFd).Decode(&val.plan)
 	if err != nil {
 		log.Printf("Failed to decode plan file '%s': %v", planPath, err)
 		return nil, err
 	}
-	return &plan, nil
+	runPlanCache[key] = val
+
+	return &val.plan, nil
 }
 
 func getTestLogFile(project string, run string, test string) (string, error) {
