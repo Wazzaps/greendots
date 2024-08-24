@@ -26,7 +26,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "1.1.0"
+const VERSION = "1.2.0"
 
 //go:generate ./gen_commit_info.sh
 //go:embed commit_info.txt
@@ -68,9 +68,10 @@ type runPlan struct {
 }
 
 type runPlanTestItem struct {
-	Id     string                 `json:"id"`
-	Name   string                 `json:"name"`
-	Params map[string]interface{} `json:"params"`
+	Id      string                 `json:"id"`
+	LogFile string                 `json:"log_file"`
+	Name    string                 `json:"name"`
+	Params  map[string]interface{} `json:"params"`
 }
 
 type statusPollResponse struct {
@@ -228,6 +229,50 @@ func isDirTraversal(path string) bool {
 	return path[:1] == "."
 }
 
+func getRunPlan(project string, run string) (*runPlan, error) {
+	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
+	planFd, err := os.Open(planPath)
+	if err != nil {
+		return nil, err
+	}
+	defer planFd.Close()
+
+	var plan runPlan
+	err = json.NewDecoder(planFd).Decode(&plan)
+	if err != nil {
+		log.Printf("Failed to decode plan file '%s': %v", planPath, err)
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func getTestLogFile(project string, run string, test string) (string, error) {
+	plan, err := getRunPlan(project, run)
+	if err != nil {
+		return "", err
+	}
+	var logFile string
+	for _, group := range plan.Groups {
+		for _, test_item := range group {
+			if test_item.Id == test {
+				if test_item.LogFile == "" {
+					logFile = fmt.Sprintf("%s.log.jsonl", test)
+				} else {
+					logFile = test_item.LogFile
+				}
+				break
+			}
+		}
+		if logFile != "" {
+			break
+		}
+	}
+	if logFile == "" || isDirTraversal(logFile) {
+		return "", fmt.Errorf("test not found")
+	}
+	return logFile, nil
+}
+
 // -- Handlers --
 
 func docsHandler(w http.ResponseWriter, r *http.Request) {
@@ -351,18 +396,8 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
-	planFd, err := os.Open(planPath)
+	plan, err := getRunPlan(project, run)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-		return
-	}
-	defer planFd.Close()
-
-	var plan runPlan
-	err = json.NewDecoder(planFd).Decode(&plan)
-	if err != nil {
-		log.Printf("Failed to decode plan file '%s': %v", planPath, err)
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
@@ -565,7 +600,6 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	no_truncate := r.URL.Query().Has("notrunc")
 
-	// Open logfile
 	project := r.PathValue("project")
 	run := r.PathValue("run")
 	test := strings.ReplaceAll(r.PathValue("test"), "/", "_")
@@ -573,7 +607,14 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	log_path := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+
+	logFile, err := getTestLogFile(project, run, test)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+
+	log_path := filepath.Join(config.ProjectsDir, project, run, logFile)
 	log_fd, err := os.Open(log_path)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
@@ -675,7 +716,14 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
-	log_path := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("%s.log.jsonl", test))
+
+	logFile, err := getTestLogFile(project, run, test)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+
+	log_path := filepath.Join(config.ProjectsDir, project, run, logFile)
 	log_fd, err := os.Open(log_path)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
