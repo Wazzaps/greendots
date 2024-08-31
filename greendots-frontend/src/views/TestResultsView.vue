@@ -15,6 +15,15 @@ import { makeConfetti } from '@/controllers/confetti';
 import { makeResizer } from '@/controllers/resizer';
 import { parse as liqe_parse, type LiqeQuery } from '@/utils/liqe-vendored/Liqe';
 import { liqe_to_function } from '@/controllers/liqe2js';
+import {
+  toggleNotifications,
+  notifications_enabled,
+  notify,
+  negative_emojis,
+  positive_emojis
+} from '@/controllers/notifications';
+import logo_positive from '@/assets/logo_positive.svg';
+import logo_negative from '@/assets/logo_negative.svg';
 
 const router = useRouter();
 const route = useRoute();
@@ -54,10 +63,64 @@ const test_data_processor = new TestDataProcessor(test_data, (event) => {
     case 'exception_list':
       refreshExceptionsDebounced(event.exceptions);
       break;
-    case 'surprise':
-      console.log('All tests passed, confetti time!');
-      makeConfetti();
+    case 'first_fail': {
+      notify(
+        `Tests failing for ${route.params.project} (${route.params.run}) ${selectRandom(negative_emojis)}`,
+        {
+          tag: `status-${route.params.project}-${route.params.run}`,
+          body: `Test: ${event.test_id}`,
+          icon: logo_negative,
+          renotify: true,
+          requireInteraction: true,
+          lang: 'en'
+        }
+      );
       break;
+    }
+    case 'tests_done': {
+      if (event.test_counts_by_status.fail == 0) {
+        // Tests passed
+        let body = `${event.test_counts_by_status.success} test(s) passed`;
+        if (event.test_counts_by_status.skip > 0) {
+          body += `, ${event.test_counts_by_status.skip} test(s) skipped`;
+        }
+        notify(
+          `Tests passed for ${route.params.project} (${route.params.run})! ${selectRandom(positive_emojis)}`,
+          {
+            tag: `status-${route.params.project}-${route.params.run}`,
+            body: body,
+            icon: logo_positive,
+            renotify: true,
+            requireInteraction: true,
+            lang: 'en'
+          }
+        );
+
+        console.log('All tests passed, confetti time!');
+        makeConfetti();
+      } else {
+        // Tests failed
+        let body = `${event.test_counts_by_status.fail} test(s) failed`;
+        if (event.test_counts_by_status.success > 0) {
+          body += `, ${event.test_counts_by_status.success} test(s) passed`;
+        }
+        if (event.test_counts_by_status.skip > 0) {
+          body += `, ${event.test_counts_by_status.skip} test(s) skipped`;
+        }
+        notify(
+          `Tests failed for ${route.params.project} (${route.params.run}) ${selectRandom(negative_emojis)}`,
+          {
+            tag: `status-${route.params.project}-${route.params.run}`,
+            body,
+            icon: logo_negative,
+            renotify: true,
+            requireInteraction: true,
+            lang: 'en'
+          }
+        );
+      }
+      break;
+    }
   }
 });
 
@@ -388,6 +451,10 @@ function copyPytestCmd() {
   navigator.clipboard.writeText(`pytest ${test_ids}`);
 }
 
+function selectRandom(arr: any[]) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 const _window = window;
 
 onMounted(() => {
@@ -422,7 +489,6 @@ onMounted(() => {
       :style="{ 'grid-column': (highlighted_col || 0) + 3 }"
       v-if="highlighted_row !== null"
     ></div>
-    <!-- TODO: maybe replace with non-range iter for key stability -->
     <span
       v-for="(col, col_idx) in plan!.cols"
       :key="`chdr-${plan!.id}-${col_idx}`"
@@ -515,6 +581,7 @@ onMounted(() => {
   </aside>
   <div
     class="sidebar-width-resizer"
+    v-if="sidebar_open"
     :style="{ right: sidebar_width - 4 + 'px' }"
     @pointerdown="sidebar_width_resizer.begin_resize"
   ></div>
@@ -533,6 +600,13 @@ onMounted(() => {
     <div class="right-buttons">
       <button @click="copyPytestCmd" title="Copy pytest command for shown tests">
         <img src="@/assets/copy.svg" />
+      </button>
+      <button
+        @click="toggleNotifications"
+        title="Toggle fail and finish notifications"
+        :class="{ activated: notifications_enabled }"
+      >
+        <img src="@/assets/bell.svg" />
       </button>
       <button
         @click="toggleSidebar"

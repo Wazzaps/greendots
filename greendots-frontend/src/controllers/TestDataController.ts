@@ -305,6 +305,22 @@ export type ProcessedPlan = {
   cols: Col[];
   test_groups: TestGroup[];
   row_params: string[];
+  test_counts_by_status: TestStatusCounts;
+};
+
+export type TestStatusCounts = {
+  pending: number;
+  progress: number;
+  success: number;
+  fail: number;
+  skip: number;
+};
+const DEFAULT_TEST_STATUS_COUNTS: TestStatusCounts = {
+  pending: 0,
+  progress: 0,
+  success: 0,
+  fail: 0,
+  skip: 0
 };
 
 export type TestDataProcessorEvent =
@@ -312,7 +328,8 @@ export type TestDataProcessorEvent =
   | ({ type: 'plan' } & ProcessedPlan)
   | { type: 'status_update'; test_idx: number }
   | { type: 'exception_list'; exceptions: ExceptionMap }
-  | { type: 'surprise' };
+  | { type: 'tests_done'; test_counts_by_status: TestStatusCounts }
+  | { type: 'first_fail'; test_id: string };
 
 export class TestDataProcessor {
   // Inputs
@@ -323,8 +340,8 @@ export class TestDataProcessor {
   // State
   private plan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
   private filteredPlan: (TestDataProcessorEvent & ProcessedPlan) | null = null;
-  private successes_left_for_surprise: number | null = null;
   private seen_whole_summary = false;
+  private seen_first_fail = false;
   private exceptions: ExceptionMap = {};
   private statusUnsub: (() => void) | null = null;
   private next_plan_id = 0;
@@ -340,8 +357,8 @@ export class TestDataProcessor {
     this.project = project;
     this.run = run;
     this.exceptions = {};
-    this.successes_left_for_surprise = null;
     this.seen_whole_summary = false;
+    this.seen_first_fail = false;
 
     (async () => {
       const raw_plan = await this.fetcher.getTestRunPlan(project, run);
@@ -433,7 +450,8 @@ export class TestDataProcessor {
           cols: filter_and_make_idx_map(this.plan.cols, (col) => col.shown, col_idx_map),
           test_items: this.plan.test_items.filter((test) => test.shown),
           test_groups: [],
-          row_params: this.plan.row_params
+          row_params: this.plan.row_params,
+          test_counts_by_status: this.plan.test_counts_by_status
         };
         for (const [idx, test] of this.plan.test_items.entries()) {
           if (test.shown) {
@@ -483,6 +501,7 @@ export class TestDataProcessor {
     const cols_json = [];
     const test_items: TestItem[] = [];
     const test_id_to_test_idx: { [_: string]: number } = {};
+    const test_counts_by_status = { ...DEFAULT_TEST_STATUS_COUNTS };
     for (const group_name in raw_plan.groups) {
       const group = raw_plan.groups[group_name];
       for (const test of group) {
@@ -525,6 +544,7 @@ export class TestDataProcessor {
         }
         // Add test item
         test_id_to_test_idx[test.id] = test_items.length;
+        test_counts_by_status.pending += 1;
         test_items.push({
           id: test.id,
           group: group_name,
@@ -550,7 +570,8 @@ export class TestDataProcessor {
       rows,
       cols,
       test_groups: [], // To be filled by filter logic
-      row_params: raw_plan.row_params
+      row_params: raw_plan.row_params,
+      test_counts_by_status
     };
   }
 
@@ -564,13 +585,6 @@ export class TestDataProcessor {
       // TODO: refactor to be less broken with malicious server
       if (status_update.type == 'summary_done') {
         this.seen_whole_summary = true;
-        let new_successes_left_for_surprise = 0;
-        for (const item of this.plan!.test_items) {
-          if (item.status != 'success') {
-            new_successes_left_for_surprise++;
-          }
-        }
-        this.successes_left_for_surprise = new_successes_left_for_surprise;
         if (this.applyFilter()) {
           this.callback(this.filteredPlan!);
         }
@@ -580,8 +594,8 @@ export class TestDataProcessor {
       ) {
         test.status = 'fail';
         test.progress = 1;
-        // TODO: Do we want the whole exception or just the last line?
         const new_exception = (status_update as any).exception as string | undefined;
+        // Use the last line as the exception key
         test.exception = new_exception ? new_exception.split('\n').pop()?.trim() : undefined;
 
         let ex_changed = false;
@@ -613,6 +627,10 @@ export class TestDataProcessor {
         if (ex_changed) {
           this.callback({ type: 'exception_list', exceptions: this.exceptions });
         }
+        if (this.seen_whole_summary && !this.seen_first_fail) {
+          this.seen_first_fail = true;
+          this.callback({ type: 'first_fail', test_id: test.id });
+        }
       } else if ((status_update as any).outcome == 'skipped') {
         test.status = 'skip';
         test.progress = 1;
@@ -624,10 +642,8 @@ export class TestDataProcessor {
         test.status = 'success';
         test.progress = 1;
       } else if (status_update.type == 'progress') {
-        if (test.status == 'pending' || test.status == 'progress') {
-          test.status = 'progress';
-          test.progress = status_update.percentage;
-        }
+        test.status = 'progress';
+        test.progress = status_update.percentage;
       } else if (status_update.type == 'call' || status_update.type == 'teardown') {
         // ignore
       } else {
@@ -642,18 +658,26 @@ export class TestDataProcessor {
         this.callback({ type: 'status_update', test_idx });
       }
 
-      // Check for surprise
-      if (this.successes_left_for_surprise !== null) {
-        const new_status = test?.status;
-        if (old_status != 'success' && new_status == 'success') {
-          if (this.successes_left_for_surprise > 0) {
-            this.successes_left_for_surprise -= 1;
-            if (this.successes_left_for_surprise == 0) {
-              this.callback({ type: 'surprise' });
-            }
-          }
-        } else if (old_status == 'success' && new_status != 'success') {
-          this.successes_left_for_surprise += 1;
+      if (test) {
+        // Update test status counters
+        const was_done =
+          this.plan!.test_counts_by_status.pending == 0 &&
+          this.plan!.test_counts_by_status.progress == 0;
+        this.plan!.test_counts_by_status[old_status] -= 1;
+        this.plan!.test_counts_by_status[test.status] += 1;
+        const is_done =
+          this.plan!.test_counts_by_status.pending == 0 &&
+          this.plan!.test_counts_by_status.progress == 0;
+        if (this.plan!.test_counts_by_status[old_status] < 0) {
+          console.error('Test status counter underflow:', this.plan!.test_counts_by_status);
+        }
+
+        // Check for tests_done, but only if we've already past the summary
+        if (!was_done && is_done && this.seen_whole_summary) {
+          this.callback({
+            type: 'tests_done',
+            test_counts_by_status: this.plan!.test_counts_by_status
+          });
         }
       }
     }
