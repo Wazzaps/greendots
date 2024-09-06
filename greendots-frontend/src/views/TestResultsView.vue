@@ -306,6 +306,7 @@ const test_item_pointer_down = ref<TestItem | null>(null);
 const highlighted_row = ref<number | null>(null);
 const highlighted_col = ref<number | null>(null);
 const hovered_test = ref<TestItem | null>(null);
+const hovered_test_ex_div = ref<HTMLDivElement | null>(null);
 const popup_shown = ref(false);
 const popup_preloading = ref(false);
 const mouse_pos_x = ref(0);
@@ -411,6 +412,15 @@ function requestRenderCanvas() {
 const requestRenderCanvasDebounced = debounce(requestRenderCanvas, 30, { maxWait: 100 });
 watch([plan, canvas, sidebar_open, hovered_ex_id], requestRenderCanvasDebounced, { deep: true });
 
+// Scroll test popups that show exceptions to bottom on load
+effect(() => {
+  if (hovered_test_ex_div.value && popup_shown.value) {
+    setTimeout(() => {
+      hovered_test_ex_div.value!.scrollTop = hovered_test_ex_div.value!.scrollHeight;
+    }, 0);
+  }
+});
+
 // --- Header resizers ---
 const height_resizer = makeResizer(
   x_height,
@@ -446,9 +456,11 @@ function format_col(col: Col) {
     .join(' ');
 }
 
-function copyPytestCmd() {
+function copyTestIds() {
   const test_ids = plan.value?.test_items.map((t) => JSON.stringify(t.id)).join(' ');
-  navigator.clipboard.writeText(`pytest ${test_ids}`);
+  if (test_ids) {
+    navigator.clipboard.writeText(test_ids);
+  }
 }
 
 function selectRandom(arr: any[]) {
@@ -598,7 +610,7 @@ onMounted(() => {
       placeholder="Filter [Ctrl K]"
     />
     <div class="right-buttons">
-      <button @click="copyPytestCmd" title="Copy pytest command for shown tests">
+      <button @click="copyTestIds" title="Copy test ids for shown tests">
         <img src="@/assets/copy.svg" />
       </button>
       <button
@@ -621,6 +633,10 @@ onMounted(() => {
   </nav>
   <div
     class="test-hover-popup"
+    :class="{
+      'test-hover-popup-success': hovered_test && hovered_test.status == 'success',
+      'test-hover-popup-fail': hovered_test && hovered_test.status == 'fail'
+    }"
     :style="{
       top:
         (mouse_pos_y < _window.innerHeight - 300 - 32 ? mouse_pos_y - 16 : mouse_pos_y - 300 + 32) +
@@ -632,7 +648,7 @@ onMounted(() => {
     v-if="hovered_test !== null && popup_preloading"
     v-show="hovered_test !== null && popup_shown"
   >
-    <div>
+    <div class="test-hover-popup-info">
       <span>{{ hovered_test.id }}</span>
       <span>
         {{ hovered_test.status
@@ -642,8 +658,13 @@ onMounted(() => {
       </span>
     </div>
     <iframe
+      class="test-hover-popup-log"
       :src="`/api/v1/projects/${encodeURIComponent($route.params.project as string)}/runs/${encodeURIComponent($route.params.run as string)}/test/${encodeURIComponent(hovered_test.id)}/log_tail`"
+      v-if="!hovered_test.exception"
     ></iframe>
+    <div class="test-hover-popup-log" ref="hovered_test_ex_div" v-else>
+      {{ hovered_test.exception }}
+    </div>
   </div>
 </template>
 
@@ -743,17 +764,38 @@ nav > div {
   background: #111;
   border-radius: 8px;
   z-index: 102;
+  border: 2px solid #111;
 }
-.test-hover-popup > div {
+.test-hover-popup > .test-hover-popup-info {
   display: flex;
   justify-content: space-between;
   padding: 4px 8px;
 }
-.test-hover-popup > iframe {
+.test-hover-popup > .test-hover-popup-log {
   min-width: 600px;
   width: 100%;
   height: 250px;
+  max-height: 250px;
   border: none;
+}
+.test-hover-popup > div.test-hover-popup-log {
+  font-family: monospace;
+  background: #222;
+  color: #ddd;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  padding: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.test-hover-popup-success {
+  border: 2px solid #055524;
+}
+.test-hover-popup-fail {
+  border: 2px solid #5b0f06;
 }
 .height-resizer {
   background: rgba(255, 255, 255, 0);

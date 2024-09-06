@@ -247,7 +247,7 @@ export const TEST_ITEM_FILTERABLE_FIELDS = [
   'params',
   'status',
   'progress',
-  'exception',
+  'exception_title',
   'ex'
 ];
 export type TestItem = {
@@ -266,7 +266,8 @@ export type TestItem = {
   // TODO: Rename to be closer to `outcome`
   status: 'pending' | 'progress' | 'success' | 'fail' | 'skip';
   progress: number;
-  exception?: string;
+  exception_title?: string; // The first line of the exception
+  exception?: string; // The whole exception
   ex?: string; // A short hash of the exception
   ex_color?: string; // A color derived from the exception hash
 };
@@ -596,7 +597,8 @@ export class TestDataProcessor {
         test.progress = 1;
         const new_exception = (status_update as any).exception as string | undefined;
         // Use the last line as the exception key
-        test.exception = new_exception ? new_exception.split('\n').pop()?.trim() : undefined;
+        test.exception = new_exception;
+        test.exception_title = new_exception ? new_exception.split('\n').pop()?.trim() : undefined;
 
         let ex_changed = false;
         if (test.ex !== undefined) {
@@ -606,13 +608,13 @@ export class TestDataProcessor {
           }
           ex_changed = true;
         }
-        test.ex = test.exception ? cyrb53_base36_6chars(test.exception) : undefined;
+        test.ex = test.exception_title ? cyrb53_base36_6chars(test.exception_title) : undefined;
         test.ex_color = test.ex ? ex_hash_color(test.ex) : undefined;
         if (test.ex) {
           if (this.exceptions[test.ex] === undefined) {
             this.exceptions[test.ex] = {
               id: test.ex,
-              text: test.exception!,
+              text: test.exception_title!,
               // Also store (one of the) the full exception texts
               long_text: (status_update as any).exception,
               color: test.ex_color!,
