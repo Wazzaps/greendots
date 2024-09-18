@@ -230,12 +230,25 @@ class LivelogPlugin:
         # assume zero
         if self._xdist_supported:
             import xdist
-            worker_id = xdist.get_xdist_worker_id(session)
-            if worker_id == 'master':
-                worker_id = 0
-            else:
+
+            is_controller = xdist.is_xdist_controller(session)
+            is_master = xdist.is_xdist_master(session)
+            is_worker = xdist.is_xdist_worker(session)
+
+            if is_master or is_controller:
+                # if this is not a worker then no need 
+                # to create the status file 
+                return
+            
+            elif is_worker:
+                # this is a worker, get the worker_id
+                worker_id = xdist.get_xdist_worker_id(session)
                 assert worker_id.startswith('gw'), f"Invalid worker id {worker_id}"
                 worker_id = int(worker_id[len('gw'):])
+
+            else:
+                # this is neither, meaning we did not activate xdist
+                worker_id = 0
         else:
             worker_id = 0
 
