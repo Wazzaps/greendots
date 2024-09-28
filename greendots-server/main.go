@@ -234,7 +234,7 @@ func fullWrite(w http.ResponseWriter, data string) error {
 }
 
 func isDirTraversal(path string) bool {
-	return path[:1] == "."
+	return path[:1] == "." || strings.Contains(path, "/")
 }
 
 type runPlanCacheKey struct {
@@ -290,11 +290,7 @@ func getTestLogFile(project string, run string, test string) (string, error) {
 	for _, group := range plan.Groups {
 		for _, test_item := range group {
 			if test_item.Id == test {
-				if test_item.LogFile == "" {
-					logFile = fmt.Sprintf("%s.log.jsonl", test)
-				} else {
-					logFile = test_item.LogFile
-				}
+				logFile = test_item.LogFile
 				break
 			}
 		}
@@ -637,8 +633,8 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	project := r.PathValue("project")
 	run := r.PathValue("run")
-	test := strings.ReplaceAll(r.PathValue("test"), "/", "_")
-	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
+	test := r.PathValue("test")
+	if isDirTraversal(project) || isDirTraversal(run) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}
@@ -746,8 +742,8 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	// Open logfile
 	project := r.PathValue("project")
 	run := r.PathValue("run")
-	test := strings.ReplaceAll(r.PathValue("test"), "/", "_")
-	if isDirTraversal(project) || isDirTraversal(run) || isDirTraversal(test) {
+	test := r.PathValue("test")
+	if isDirTraversal(project) || isDirTraversal(run) {
 		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 		return
 	}

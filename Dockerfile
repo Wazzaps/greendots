@@ -1,5 +1,5 @@
 # build the frontend 
-FROM node:22-alpine as greendots-frontend-builder
+FROM node:22-alpine AS greendots-frontend-builder
 WORKDIR /greendots-frontend
 COPY \
     greendots-frontend/package.json \
@@ -19,7 +19,7 @@ COPY greendots-frontend/public ./public
 RUN node_modules/.bin/vite build
 
 # build the server
-FROM golang:1.22.5-alpine as greendots-server-builder
+FROM golang:1.22.5-alpine AS greendots-server-builder
 RUN apk add minify
 
 COPY \
