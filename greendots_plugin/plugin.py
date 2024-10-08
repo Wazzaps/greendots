@@ -289,14 +289,26 @@ class LivelogPlugin:
         if self._xdist_supported:
             import xdist
 
-            worker_id = xdist.get_xdist_worker_id(session)
-            if worker_id == 'master':
-                worker_count = 1
-            elif worker_id == 'gw0':
-                worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"))
-            else:
-                # not the master or first worker, ignore
+            is_controller = xdist.is_xdist_controller(session)
+            is_master = xdist.is_xdist_master(session)
+            is_worker = xdist.is_xdist_worker(session)
+
+            if is_master or is_controller:
+                # ignore in controller or master (I don't think these even run the hook)
                 return
+                
+            elif is_worker:
+                # this is a worker, if its the first one then set the worker count
+                # otherwise ignore
+                worker_id = xdist.get_xdist_worker_id(session)
+                if worker_id == 'gw0':
+                    worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
+                else:
+                    return
+                
+            else:
+                # no xdist -n, ignore 
+                worker_count = 1
 
         else:
             worker_count = 1
