@@ -26,7 +26,7 @@ import (
 	"github.com/andanhm/go-prettytime"
 )
 
-const VERSION = "1.4.1"
+const VERSION = "1.5.0"
 
 //go:generate ./gen_commit_info.sh
 //go:embed commit_info.txt
