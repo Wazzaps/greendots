@@ -56,34 +56,76 @@ class StatusFile:
 
 
 class ProgressLogger:
-    def __init__(self, status_file: StatusFile, test):
+    def __init__(self, status_file: StatusFile, test, parent: 'ProgressLogger' = None, base_value: float = 0, fraction: float = 1):
         self._status_file = status_file
-        self._last_time = None
-        self._min_interval = 0.1
         self._done = status_file is None
         self._test = test
+        
+        # fraction
+        self._fraction = fraction
+        self._base_value = base_value
+        self._last_value = base_value
 
-    def ratelimit(self):
-        if self._last_time is not None:
-            interval = time.time() - self._last_time
-            if interval < self._min_interval:
-                return True
-        self._last_time = time.time()
-        return False
+        # the parent         
+        self._parent = parent
+    
+    def split(self, count):
+        """
+        Splits the current progress bar into multiple 
+        smaller ones of equal weights
+        """
+        loggers = []
+        fraction = self._fraction / count
+        for i in range(count):
+            loggers.append(ProgressLogger(self._status_file, self._done, self, fraction * i, fraction))
+        return loggers
 
     def __call__(self, percentage):
-        if self._done or self.ratelimit():
+        """
+        Update the progress bar with the given percentage
+        """
+        
+        # if already done ignore
+        if self._done:
             return
 
-        # clamp between 0 and 1
-        percentage = min(max(percentage, 0.0), 1.0)
-        if percentage == 1.0:
-            self._done = True
-            return
-
-        self._status_file.log(
-            {"type": "progress", "percentage": percentage, "test": self._test}
-        )
+        # if we have a parent update the parent
+        if self._parent is not None:
+            self._parent(self._base_value + self._value * self._fraction)
+        else:
+            # clamp between 0 and 1
+            percentage = min(max(percentage, 0.0), 1.0)
+            if percentage >= 1.0:
+                self._done = True
+            
+            # make sure we only log if we have a difference of 1% of change
+            should_log = abs(percentage - self._last_value) > (1 / 100)
+            
+            if should_log:
+                self._status_file.log(
+                    {"type": "progress", "percentage": percentage, "test": self._test}
+                )
+                self._last_value = self._last_value
+                
+    def sleep(self, total_seconds):
+        """
+        Fill the progress bar by sleeping
+        """
+        assert not self._done, "Progress logger is already done"
+        
+        # we only need to update every 1%, so let it sleep for a good amount 
+        # of time between each, technically this might still be too much if we 
+        # are just a child of something else, but this is good enough for our needs
+        update_interval = total_seconds / 100
+        
+        # go in a loop until we are done 
+        start_time = time.time()
+        while True:
+            elapsed = time.time() - start_time
+            self(elapsed / total_seconds)
+            if self._done:
+                break
+            time.sleep(min(update_interval, total_seconds - elapsed))
 
     def done(self):
         if self._done:
@@ -94,7 +136,7 @@ class ProgressLogger:
 
 
 def json_encode_default(o):
-    f = getattr(o, '__greendots_format__', None)
+    f = getattr(o, '__livelog_format__', None)
     if f is None:
         return repr(o)
     else:
