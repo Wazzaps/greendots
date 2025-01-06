@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "greendots_plugin"
-version = "0.1.6"
+version = "0.1.7"
 description = "Pytest plugin for generating greendots-compatible logs and status updates"
 authors = [
     "Itay Almog <itay2828@gmail.com>",
