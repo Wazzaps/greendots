@@ -142,6 +142,24 @@ def pytest_addoption(parser):
         "--livelog",
         help="Sets the path the logs, plan and status files should be written to",
     )
+    parser.addoption(
+        "--livelog-worker-id",
+        default=None,
+        help="Get the worker id in line instead of from the xdist.",
+        type=int,
+    )
+    parser.addoption(
+        "--livelog-worker-count",
+        default=None,
+        help="Override the number of workers in the entire run.",
+        type=int,
+    )
+    parser.addoption(
+        "--skip-plan-creation",
+        default=False,
+        action="store_true",
+        help="Override livelog to not create a plan.json but use an existing one.",
+    )
 
 
 _FILENAME_SPECIAL_CHARS = '<>"/\\|?*'
@@ -197,6 +215,9 @@ def _create_log_name(nodeid):
 class LivelogPlugin:
     def __init__(self):
         self._log_path = None
+        self._worker_id = None
+        self._worker_count = None
+        self._skip_plan = False
 
         self._status_file: StatusFile = None
         self._handler = None
@@ -212,6 +233,10 @@ class LivelogPlugin:
         if self._log_path is None:
             return
 
+        self._worker_id = config.getoption("--livelog-worker-id")
+        self._worker_count = config.getoption("--livelog-worker-count")
+        self._skip_plan = config.getoption("--skip-plan-creation")
+
         # I don't care if we create on everything including
         # the workers, it doesn't change anything
         os.makedirs(self._log_path, exist_ok=True)
@@ -220,39 +245,37 @@ class LivelogPlugin:
         if config.pluginmanager.hasplugin("xdist"):
             self._xdist_supported = True
 
-    def pytest_sessionstart(self, session):
-        # if no log path ignore
+    def is_worker(self, session: pytest.Session) -> bool:
         if self._log_path is None:
-            return
+            return False
 
-        # figure the worker id, if we have xdist then get from
-        # the worker id, if master assume zero, without xdist we
-        # assume zero
         if self._xdist_supported:
             import xdist
 
-            is_controller = xdist.is_xdist_controller(session)
-            is_master = xdist.is_xdist_master(session)
-            is_worker = xdist.is_xdist_worker(session)
+            if xdist.is_xdist_controller(session) or xdist.is_xdist_master(session):
+                return False
 
-            if is_master or is_controller:
-                # if this is not a worker then no need 
-                # to create the status file 
-                return
-            
-            elif is_worker:
-                # this is a worker, get the worker_id
-                worker_id = xdist.get_xdist_worker_id(session)
-                assert worker_id.startswith('gw'), f"Invalid worker id {worker_id}"
-                worker_id = int(worker_id[len('gw'):])
+        return True
 
-            else:
-                # this is neither, meaning we did not activate xdist
-                worker_id = 0
-        else:
-            worker_id = 0
+    def get_worker_id(self, session: pytest.Session) -> int:
+        if isinstance(self._worker_id, int):
+            return self._worker_id
 
-        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{worker_id}.jsonl"), "w"))
+        elif self._xdist_supported:
+            import xdist
+
+            if xdist.is_xdist_worker(session):
+                xdist_worker_id = xdist.get_xdist_worker_id(session)
+                assert xdist_worker_id.startswith('gw'), f"Invalid worker id {xdist_worker_id}"
+                return int(xdist_worker_id[len('gw'):])
+
+        return 0
+
+    def pytest_sessionstart(self, session):
+        if not self.is_worker(session):
+            return
+
+        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"), "w"))
 
     def pytest_runtest_logreport(self, report: pytest.TestReport):
         if self._status_file is None:
@@ -278,8 +301,36 @@ class LivelogPlugin:
 
         self._status_file.log(d)
 
+    def should_create_plan(self, session: pytest.Session) -> bool:
+        if self._skip_plan or self._log_path is None:
+            return False
+        elif self._xdist_supported:
+            import xdist
+
+            is_controller = xdist.is_xdist_controller(session)
+            is_master = xdist.is_xdist_master(session)
+            is_worker = xdist.is_xdist_worker(session)
+
+            if is_master or is_controller:
+                return False
+
+            if is_worker:
+                worker_id = xdist.get_xdist_worker_id(session)
+                return worker_id == 'gw0'
+        return True
+
+    @property
+    def worker_count(self) -> int:
+        if isinstance(self._worker_count, int):
+            return self._worker_count
+
+        if self._xdist_supported:
+            return int(os.getenv("PYTEST_XDIST_WORKER_COUNT", 1))
+
+        return 1
+
     def pytest_collection_finish(self, session: pytest.Session):
-        if self._log_path is None:
+        if not self.should_create_plan(session):
             return
 
         # if we have xdist then properly get the worker count,
@@ -302,16 +353,16 @@ class LivelogPlugin:
                 # otherwise ignore
                 worker_id = xdist.get_xdist_worker_id(session)
                 if worker_id == 'gw0':
-                    worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
+                    self._worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
                 else:
                     return
                 
             else:
                 # no xdist -n, ignore 
-                worker_count = 1
+                self._worker_count = 1
 
         else:
-            worker_count = 1
+            self._worker_count = 1
 
         # go over the items and generate the plan
         groups = {}
@@ -345,7 +396,7 @@ class LivelogPlugin:
             )
 
         plan = {
-            "worker_count": worker_count,
+            "worker_count": self.worker_count,
             "groups": groups,
             "row_params": [] if row_params is None else list(row_params),
         }
