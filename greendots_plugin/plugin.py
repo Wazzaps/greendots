@@ -353,16 +353,16 @@ class LivelogPlugin:
                 # otherwise ignore
                 worker_id = xdist.get_xdist_worker_id(session)
                 if worker_id == 'gw0':
-                    worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
+                    self._worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
                 else:
                     return
                 
             else:
                 # no xdist -n, ignore 
-                worker_count = 1
+                self._worker_count = 1
 
         else:
-            worker_count = 1
+            self._worker_count = 1
 
         # go over the items and generate the plan
         groups = {}
