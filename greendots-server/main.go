@@ -416,6 +416,12 @@ func runPlanHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, planPath)
 }
 
+type statusResult struct {
+	Statuses map[string]map[string]interface{}
+	Index    int
+	Offset   int
+}
+
 func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/jsonl")
 
@@ -433,53 +439,88 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read all status files, save the last line per test
-	final_statuses := make(map[string]map[string]interface{})
+	statuses_channel := make(chan *statusResult)
+	var statuses_wg sync.WaitGroup
 	for status_idx := range plan.WorkerCount {
-		statusSummaryPath := filepath.Join(
-			config.ProjectsDir, project, run,
-			fmt.Sprintf("status.%d.jsonl", status_idx),
-		)
-		fd, err := os.Open(statusSummaryPath)
-		if err != nil {
-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-			return
-		}
-		defer fd.Close()
+		statuses_wg.Add(1)
+		go func(idx int) {
+			defer statuses_wg.Done()
 
-		scanner := bufio.NewScanner(fd)
-		final_offset := 0
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			if len(line) == 0 {
-				break
+			local_result := &statusResult{
+				Statuses: make(map[string]map[string]interface{}),
+				Index:    idx,
 			}
 
-			var status_obj map[string]interface{}
-			err := json.Unmarshal(line, &status_obj)
+			// open the status file, if not found just ignore it
+			statusSummaryPath := filepath.Join(
+				config.ProjectsDir, project, run,
+				fmt.Sprintf("status.%d.jsonl", idx),
+			)
+			fd, err := os.Open(statusSummaryPath)
 			if err != nil {
-				// Probably a partial line, stop here
-				break
+				return
+			}
+			defer fd.Close()
+
+			scanner := bufio.NewScanner(fd)
+			final_offset := 0
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				if len(line) == 0 {
+					break
+				}
+
+				var status_obj map[string]interface{}
+				err := json.Unmarshal(line, &status_obj)
+				if err != nil {
+					// Probably a partial line, stop here
+					break
+				}
+
+				// Store the final status of each test
+				key := status_obj["test"].(string)
+				if prev_status, ok := local_result.Statuses[key]; ok {
+					prev_exc := prev_status["exception"]
+					if prev_exc != nil && status_obj["exception"] == nil {
+						status_obj["exception"] = prev_exc
+					}
+				}
+				local_result.Statuses[key] = status_obj
+
+				// Keep a counter for the offset
+				final_offset += len(line) + 1
 			}
 
-			// Store the final status of each test
-			key := status_obj["test"].(string)
-			if prev_status, ok := final_statuses[key]; ok {
-				prev_exc := prev_status["exception"]
-				if prev_exc != nil && status_obj["exception"] == nil {
-					status_obj["exception"] = prev_exc
-				}
-			}
-			final_statuses[key] = status_obj
-			// Keep a counter for the offset
-			final_offset += len(line) + 1
-		}
-		w.Header().Add("X-End-Offset", fmt.Sprintf("%d", final_offset))
+			// Set the offset and send it to be written
+			local_result.Offset = final_offset
+			statuses_channel <- local_result
+		}(status_idx)
 	}
 
+	// Close the channels once we are done with all the workers
+	go func() {
+		statuses_wg.Wait()
+		close(statuses_channel)
+	}()
+
+	// get and merge all the statuses
 	enc := json.NewEncoder(w)
-	for _, status_obj := range final_statuses {
-		enc.Encode(status_obj)
+	indexes := make([]int, plan.WorkerCount)
+	for res := range statuses_channel {
+		// write each of the status objects
+		// NOTE: we assume in here that the key (aka the test) will never be on two workers, so we don't
+		// 		 need to perform a proper merge in here
+		for _, status_obj := range res.Statuses {
+			enc.Encode(status_obj)
+		}
+
+		// save the offset at the correct index, so we can write them in order
+		indexes[res.Index] = res.Offset
+	}
+
+	// And now add all the offsets in order
+	for offset := range indexes {
+		w.Header().Add("X-End-Offset", fmt.Sprintf("%d", offset))
 	}
 }
 
