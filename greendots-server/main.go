@@ -503,24 +503,30 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		close(statuses_channel)
 	}()
 
-	// get and merge all the statuses
-	enc := json.NewEncoder(w)
+	// Get all the offsets and statuses in the correct order
+	// NOTE: while it doesn't matter for the statuses it does make it easier
+	//		 for the indexes, and we need to save them aside anyways since the header
+	//		 must be modified before writing to the body
 	indexes := make([]int, plan.WorkerCount)
+	statuses := make([]map[string]map[string]interface{}, plan.WorkerCount)
 	for res := range statuses_channel {
-		// write each of the status objects
-		// NOTE: we assume in here that the key (aka the test) will never be on two workers, so we don't
-		// 		 need to perform a proper merge in here
-		for _, status_obj := range res.Statuses {
-			enc.Encode(status_obj)
-		}
-
-		// save the offset at the correct index, so we can write them in order
+		statuses[res.Index] = res.Statuses
 		indexes[res.Index] = res.Offset
 	}
 
-	// And now add all the offsets in order
-	for offset := range indexes {
+	// and now we can write all of the
+	for _, offset := range indexes {
 		w.Header().Add("X-End-Offset", fmt.Sprintf("%d", offset))
+	}
+
+	// write each of the status objects
+	enc := json.NewEncoder(w)
+	for _, res := range statuses {
+		// NOTE: we assume in here that the key (aka the test) will never be on
+		//		 two workers, so we don't need to perform a proper merge in here
+		for _, status_obj := range res {
+			enc.Encode(status_obj)
+		}
 	}
 }
 
