@@ -46,4 +46,3 @@ RUN cd greendots-server && go generate . && go build -trimpath .
 # and now create the final runtime image
 FROM alpine:latest
 COPY --from=greendots-server-builder /go/greendots-server/greendots /usr/local/bin/greendots
-CMD ["/usr/local/bin/greendots"]

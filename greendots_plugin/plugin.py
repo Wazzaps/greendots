@@ -16,7 +16,7 @@ class LivelogLoggingHandler(logging.Handler):
     def __init__(self, path):
         super().__init__()
         self._log_file = open(path, "w")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.setLevel(logging.DEBUG)
         self.setFormatter(logging.Formatter("%(message)s"))
 
@@ -42,7 +42,7 @@ class LivelogLoggingHandler(logging.Handler):
 class StatusFile:
     def __init__(self, status_file):
         self._status_file = status_file
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def log(self, d):
         if "time" not in d:
