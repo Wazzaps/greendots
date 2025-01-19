@@ -375,37 +375,6 @@ class LivelogPlugin:
         if not self.should_create_plan(session):
             return
 
-        # if we have xdist then properly get the worker count,
-        # otherwise assume we have a single worker
-        # only allow the master or the first worker to create the
-        # plan.json to avoid weird collisions
-        if self._xdist_supported:
-            import xdist
-
-            is_controller = xdist.is_xdist_controller(session)
-            is_master = xdist.is_xdist_master(session)
-            is_worker = xdist.is_xdist_worker(session)
-
-            if is_master or is_controller:
-                # ignore in controller or master (I don't think these even run the hook)
-                return
-                
-            elif is_worker:
-                # this is a worker, if its the first one then set the worker count
-                # otherwise ignore
-                worker_id = xdist.get_xdist_worker_id(session)
-                if worker_id == 'gw0':
-                    self._worker_count = int(os.getenv("PYTEST_XDIST_WORKER_COUNT"), 0)
-                else:
-                    return
-                
-            else:
-                # no xdist -n, ignore 
-                self._worker_count = 1
-
-        else:
-            self._worker_count = 1
-
         # go over the items and generate the plan
         groups = {}
         row_params = None
