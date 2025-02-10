@@ -317,7 +317,7 @@ class LivelogPlugin:
         if not self.is_worker(session):
             return
 
-        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"), "w"))
+        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"), "a+"))
 
     def pytest_runtest_logreport(self, report: pytest.TestReport):
         if self._status_file is None:
