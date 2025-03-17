@@ -211,7 +211,8 @@ function renderCanvas(_time: number) {
     skip: '#ffee51',
     pending: '#3f3f3f',
     progress: '#4d472d',
-    progress_stroke: '#aa9f6e'
+    progress_stroke: '#aa9f6e',
+    reviewed: '#d3d3d3'
   };
 
   // Resize canvas if needed
@@ -239,6 +240,9 @@ function renderCanvas(_time: number) {
     let color = cell_colors[test.status] || cell_colors['pending'];
     if (test.status == 'fail' && sidebar_open.value) {
       color = test.ex_color || color;
+    }
+    if (test.reviewed) {
+      color = cell_colors['reviewed'];
     }
     ctx.fillStyle = color;
 
@@ -325,7 +329,11 @@ function handleCanvasPointerDown(e: MouseEvent) {
 function handleCanvasPointerUp(e: MouseEvent) {
   const [test, inside_circle] = canvasGetRelevantTest(e);
   if (test && inside_circle && test_item_pointer_down.value?.id == test.id) {
-    if (e.altKey) {
+    if (e.shiftKey && (test.status === 'fail' || test.status === 'skip')) {
+      test.reviewed = !test.reviewed;
+      saveReviewedTests();
+      requestRenderCanvas();
+    } else if (e.altKey) {
       filter_string.value = `status:${test.status}`;
     } else if (e.ctrlKey) {
       window.open(
@@ -467,10 +475,29 @@ function selectRandom(arr: any[]) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+function saveReviewedTests() {
+  const reviewedTests = plan.value?.test_items
+    .filter((test) => test.reviewed)
+    .map((test) => test.id) || [];
+  const key = `reviewedTests-${route.params.project}-${route.params.run}`;
+  localStorage.setItem(key, JSON.stringify(reviewedTests));
+}
+
+function loadReviewedTests() {
+  const key = `reviewedTests-${route.params.project}-${route.params.run}`;
+  const reviewedTests = JSON.parse(localStorage.getItem(key) || '[]');
+  if (plan.value) {
+    for (const test of plan.value.test_items) {
+      test.reviewed = reviewedTests.includes(test.id);
+    }
+  }
+}
+
 const _window = window;
 
 onMounted(() => {
   document.title = `${route.params.run} (${route.params.project}) · GreenDots`;
+  loadReviewedTests();
 });
 </script>
 
