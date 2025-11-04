@@ -560,6 +560,10 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 			statusPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
 			stat, err := os.Stat(statusPath)
 			if err != nil {
+				// If the file doesn't exist, skip it and move on to the next file.
+				if os.IsNotExist(err) {
+					continue;
+				}
 				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 				return
 			}
