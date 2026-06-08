@@ -129,6 +129,7 @@ type greendotsConfig struct {
 	AdditionalLogLevels map[string]logLevel `toml:"additional_log_levels" json:"additional_log_levels"`
 	ProjectsDir         string              `toml:"projects_dir" json:"projects_dir"`
 	ListenAddress       string              `toml:"listen_address" json:"listen_address"`
+	MaxLineSize         int                 `toml:"max_line_size" json:"max_line_size"`
 }
 
 var config = greendotsConfig{
@@ -157,6 +158,7 @@ var config = greendotsConfig{
 	},
 	ProjectsDir:   "",
 	ListenAddress: ":8080",
+	MaxLineSize: 0x4000000, // 64MB
 }
 
 // -- Helpers --
@@ -750,6 +752,11 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Go over the log file and format it to html
 	scanner := bufio.NewScanner(chunk_pipe_rd)
+
+	// Increase scanner size...
+	buf := make([]byte, 0, 64 * 1024)
+	scanner.Buffer(buf, config.MaxLineSize)
+
 	byte_counter := 0
 	last_date := ""
 	last_time := 0.0
