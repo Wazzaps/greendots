@@ -4,5 +4,8 @@
 # Python / uv
 .venv/
 __pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
 *.py[cod]
 *.egg-info/

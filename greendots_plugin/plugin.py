@@ -56,35 +56,44 @@ class StatusFile:
 
 
 class ProgressLogger:
-    def __init__(self, status_file: StatusFile, test, parent: 'ProgressLogger' = None, base_value: float = 0, fraction: float = 1):
+    def __init__(
+        self,
+        status_file: StatusFile,
+        test,
+        parent: "ProgressLogger" = None,
+        base_value: float = 0,
+        fraction: float = 1,
+    ):
         self._status_file = status_file
         self._done = status_file is None
         self._test = test
-        
+
         # fraction
         self._fraction = fraction
         self._base_value = base_value
         self._last_value = base_value
 
-        # the parent         
+        # the parent
         self._parent = parent
-    
+
     def split(self, count):
         """
-        Splits the current progress bar into multiple 
+        Splits the current progress bar into multiple
         smaller ones of equal weights
         """
         loggers = []
         fraction = self._fraction / count
         for i in range(count):
-            loggers.append(ProgressLogger(self._status_file, self._done, self, fraction * i, fraction))
+            loggers.append(
+                ProgressLogger(self._status_file, self._done, self, fraction * i, fraction)
+            )
         return loggers
 
     def __call__(self, percentage):
         """
         Update the progress bar with the given percentage
         """
-        
+
         # if already done ignore
         if self._done:
             return
@@ -97,28 +106,28 @@ class ProgressLogger:
             percentage = min(max(percentage, 0.0), 1.0)
             if percentage >= 1.0:
                 self._done = True
-            
+
             # make sure we only log if we have a difference of 1% of change
             should_log = abs(percentage - self._last_value) > (1 / 100)
-            
+
             if should_log:
                 self._status_file.log(
                     {"type": "progress", "percentage": percentage, "test": self._test}
                 )
                 self._last_value = self._last_value
-                
+
     def sleep(self, total_seconds):
         """
         Fill the progress bar by sleeping
         """
         assert not self._done, "Progress logger is already done"
-        
-        # we only need to update every 1%, so let it sleep for a good amount 
-        # of time between each, technically this might still be too much if we 
+
+        # we only need to update every 1%, so let it sleep for a good amount
+        # of time between each, technically this might still be too much if we
         # are just a child of something else, but this is good enough for our needs
         update_interval = total_seconds / 100
-        
-        # go in a loop until we are done 
+
+        # go in a loop until we are done
         start_time = time.time()
         while True:
             elapsed = time.time() - start_time
@@ -136,7 +145,7 @@ class ProgressLogger:
 
 
 def json_encode_default(o):
-    f = getattr(o, '__livelog_format__', None)
+    f = getattr(o, "__livelog_format__", None)
     if f is None:
         return repr(o)
     else:
@@ -208,7 +217,9 @@ _FILENAME_SPECIAL_CHARS = '<>"/\\|?*'
 
 
 def _hash(s):
-    digest = base64.b32encode(hashlib.blake2b(s.encode('utf-8'), digest_size=5).digest()).decode('utf-8')
+    digest = base64.b32encode(hashlib.blake2b(s.encode("utf-8"), digest_size=5).digest()).decode(
+        "utf-8"
+    )
     return digest
 
 
@@ -237,21 +248,21 @@ def _create_log_name(nodeid):
         begin = log_file_name[:50]
         end = log_file_name[-50:]
         digest = _hash(nodeid)
-        log_file_name = f'{begin}-{digest}-{end}'
+        log_file_name = f"{begin}-{digest}-{end}"
 
     # if we have special character append the digest to make
     # sure we won't have a name collision
     elif has_special_symbols:
         digest = _hash(nodeid)
-        log_file_name = f'{log_file_name}-{digest}'
+        log_file_name = f"{log_file_name}-{digest}"
 
     # replace special characters
     if has_special_symbols:
         for c in _FILENAME_SPECIAL_CHARS:
-            log_file_name = log_file_name.replace(c, '_')
+            log_file_name = log_file_name.replace(c, "_")
 
     # and lastly add the extension
-    return log_file_name + '.log.jsonl'
+    return log_file_name + ".log.jsonl"
 
 
 class LivelogPlugin:
@@ -308,8 +319,8 @@ class LivelogPlugin:
 
             if xdist.is_xdist_worker(session):
                 xdist_worker_id = xdist.get_xdist_worker_id(session)
-                assert xdist_worker_id.startswith('gw'), f"Invalid worker id {xdist_worker_id}"
-                return int(xdist_worker_id[len('gw'):])
+                assert xdist_worker_id.startswith("gw"), f"Invalid worker id {xdist_worker_id}"
+                return int(xdist_worker_id[len("gw") :])
 
         return 0
 
@@ -317,7 +328,12 @@ class LivelogPlugin:
         if not self.is_worker(session):
             return
 
-        self._status_file = StatusFile(status_file=open(os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"), "a+"))
+        self._status_file = StatusFile(
+            status_file=open(
+                os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"),
+                "a+",
+            )
+        )
 
     def pytest_runtest_logreport(self, report: pytest.TestReport):
         if self._status_file is None:
@@ -358,7 +374,7 @@ class LivelogPlugin:
 
             if is_worker:
                 worker_id = xdist.get_xdist_worker_id(session)
-                return worker_id == 'gw0'
+                return worker_id == "gw0"
         return True
 
     @property
@@ -403,7 +419,12 @@ class LivelogPlugin:
                 groups[test_module] = []
 
             groups[test_module].append(
-                {"id": nodeid, "log_file": _create_log_name(nodeid), "name": test_name, "params": test_params}
+                {
+                    "id": nodeid,
+                    "log_file": _create_log_name(nodeid),
+                    "name": test_name,
+                    "params": test_params,
+                }
             )
 
         plan = {
@@ -421,7 +442,9 @@ class LivelogPlugin:
         if self._status_file is None:
             return
 
-        assert self._handler is None, "pytest_runtest_logstart called before pytest_runtest_logfinish"
+        assert self._handler is None, (
+            "pytest_runtest_logstart called before pytest_runtest_logfinish"
+        )
 
         log_file = os.path.join(self._log_path, _create_log_name(nodeid))
 
@@ -442,13 +465,13 @@ class LivelogPlugin:
         if self._status_file is None:
             return
 
-        self._status_file.log(
-            {"type": "finish", "outcome": self._worst_outcome, "test": nodeid}
-        )
+        self._status_file.log({"type": "finish", "outcome": self._worst_outcome, "test": nodeid})
 
         # we can remove the handler and close it
         # since no one should be using it anymore
-        assert self._handler is not None, "pytest_runtest_logfinish called before pytest_runtest_logstart"
+        assert self._handler is not None, (
+            "pytest_runtest_logfinish called before pytest_runtest_logstart"
+        )
         logging.getLogger().removeHandler(self._handler)
         self._handler = None
 

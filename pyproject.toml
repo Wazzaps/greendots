@@ -27,7 +27,7 @@ greendots_plugin = "greendots_plugin.plugin"
 dev = [
     "pytest>=8.3.2",
     "ruff>=0.5.6",
-    "black>=24",
+    "mypy>=1.8",
 ]
 
 [build-system]
@@ -38,5 +38,10 @@ build-backend = "uv_build"
 module-root = ""
 module-name = "greendots_plugin"
 
-[tool.black]
+[tool.ruff]
 line-length = 99
+
+[tool.mypy]
+python_version = "3.8"
+strict = true
+files = ["greendots_plugin"]
