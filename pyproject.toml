@@ -40,8 +40,17 @@ module-name = "greendots_plugin"
 
 [tool.ruff]
 line-length = 99
+# Keep the source importable on the declared floor (3.8) even though we
+# type-check against 3.10; this stops ruff suggesting 3.9+-only constructs.
+target-version = "py38"
 
 [tool.mypy]
-python_version = "3.8"
+# mypy 2.x cannot target below 3.10. Runtime support down to 3.8 is kept via
+# `from __future__ import annotations` + ruff's py38 target, not by mypy.
+python_version = "3.10"
 strict = true
 files = ["greendots_plugin"]
+
+[[tool.mypy.overrides]]
+module = ["xdist", "xdist.*"]
+ignore_missing_imports = true
