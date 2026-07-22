@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import io
 import json
 import logging
+import math
 import os.path
 import sys
 import threading
 import time
-from collections.abc import Generator, Iterable
+import warnings
+from collections.abc import Generator, Iterable, Iterator
 from typing import Any, TextIO
 
 import pytest
@@ -107,9 +110,10 @@ class ProgressLogger:
         if self._parent is not None:
             self._parent(self._base_value + percentage * self._fraction)
         else:
-            # clamp between 0 and 1
+            # clamp between 0 and 1; snap near-1.0 (float drift from split()) to done
             percentage = min(max(percentage, 0.0), 1.0)
-            if percentage >= 1.0:
+            if percentage >= 1.0 or math.isclose(percentage, 1.0):
+                percentage = 1.0
                 self._done = True
 
             # log on >1% change, and always emit the final 100% so the bar completes
@@ -117,7 +121,8 @@ class ProgressLogger:
 
             if should_log:
                 # a root logger always has a status file (else it starts done)
-                assert self._status_file is not None
+                if self._status_file is None:
+                    raise RuntimeError("progress logged without a status file")
                 self._status_file.log(
                     {"type": "progress", "percentage": percentage, "test": self._test}
                 )
@@ -159,7 +164,8 @@ class ProgressLogger:
             self._parent(self._base_value + self._fraction)
         else:
             # not-done implies the logger was created with a status file
-            assert self._status_file is not None
+            if self._status_file is None:
+                raise RuntimeError("progress completed without a status file")
             self._status_file.log({"type": "progress", "percentage": 1.0, "test": self._test})
 
 
@@ -179,29 +185,37 @@ class LivelogStdoutHandler(io.TextIOBase):
         self._handler = handler
         self._parent = parent
 
+    def _log(self, message: str) -> None:
+        # we don't use a normal logger since we want the stdout to stay as stdout
+        # as far as pytest is concerned, so just let the emit work its magic
+        self._handler.write_log(
+            {
+                "name": "stderr" if self._error else "stdout",
+                "level": "ERROR" if self._error else "INFO",
+                "time": time.time(),
+                "message": message,
+            }
+        )
+
     def write(self, s: str) -> int:
         self._parent.write(s)
 
-        lines = s.splitlines(keepends=True)
-        for line in lines:
+        for line in s.splitlines(keepends=True):
             if line.endswith("\n"):
                 if self._last_line is not None:
                     line = self._last_line + line
                     self._last_line = None
-
-                # we don't use a normal logger since we want the stdout to stay as stdout
-                # as far as pytest is concerned, so just let the emit work its magic
-                self._handler.write_log(
-                    {
-                        "name": "stderr" if self._error else "stdout",
-                        "level": "ERROR" if self._error else "INFO",
-                        "time": time.time(),
-                        "message": line[:-1],
-                    }
-                )
+                self._log(line.rstrip("\r\n"))
             else:
-                self._last_line = line
+                # accumulate consecutive partial fragments until a newline arrives
+                self._last_line = (self._last_line or "") + line
         return len(s)
+
+    def flush_partial(self) -> None:
+        """Emit any buffered trailing text that never received a newline."""
+        if self._last_line is not None:
+            self._log(self._last_line)
+            self._last_line = None
 
     # typeshed types IOBase.writelines for binary buffers; text streams take str.
     def writelines(self, lines: Iterable[str]) -> None:  # type: ignore[override]
@@ -336,7 +350,8 @@ class LivelogPlugin:
 
             if xdist.is_xdist_worker(session):
                 xdist_worker_id: str = xdist.get_xdist_worker_id(session)
-                assert xdist_worker_id.startswith("gw"), f"Invalid worker id {xdist_worker_id}"
+                if not xdist_worker_id.startswith("gw"):
+                    raise ValueError(f"Invalid worker id {xdist_worker_id}")
                 return int(xdist_worker_id[len("gw") :])
 
         return 0
@@ -346,7 +361,8 @@ class LivelogPlugin:
             return
 
         # is_worker() returning True guarantees a log path was configured
-        assert self._log_path is not None
+        if self._log_path is None:
+            raise RuntimeError("worker session started without a log path")
         self._status_file = StatusFile(
             open(
                 os.path.join(self._log_path, f"status.{self.get_worker_id(session)}.jsonl"),
@@ -367,7 +383,9 @@ class LivelogPlugin:
         if report.outcome == "failed":
             d["exception"] = report.longreprtext
             self._worst_outcome = "failed"
-            logging.exception(report.longrepr)
+            # mirror the failure into the per-test log (no active exception here,
+            # so log the text rather than using logging.exception)
+            logging.error(report.longreprtext)
 
         elif report.outcome == "skipped":
             # for skipped tests longrepr is a (path, lineno, reason) tuple
@@ -414,15 +432,14 @@ class LivelogPlugin:
             return
 
         # should_create_plan() returning True guarantees a log path was configured
-        assert self._log_path is not None
+        if self._log_path is None:
+            raise RuntimeError("plan creation requested without a log path")
 
         # go over the items and generate the plan
         groups: dict[str, list[dict[str, Any]]] = {}
         row_params: set[str] | None = None
         for item in session.items:
             if isinstance(item, pytest.Function):
-                logging.info(item.own_markers)
-
                 nodeid = item.nodeid
                 test_name = item.obj.__name__
                 test_module = item.obj.__module__
@@ -438,7 +455,13 @@ class LivelogPlugin:
                     row_params.intersection_update(set(test_params.keys()))
 
             else:
-                assert False, f"Invalid pytest session item type {type(item)}"
+                # non-Function items (doctests, custom collectors, ...) don't fit
+                # the test-matrix model; skip them but warn so it isn't a silent drop
+                warnings.warn(
+                    f"greendots: skipping non-Function collection item {item!r}",
+                    stacklevel=2,
+                )
+                continue
 
             if test_module not in groups:
                 groups[test_module] = []
@@ -455,7 +478,8 @@ class LivelogPlugin:
         plan = {
             "worker_count": self.worker_count,
             "groups": groups,
-            "row_params": [] if row_params is None else list(row_params),
+            # sorted so plan.json is deterministic across runs (row_params is a set)
+            "row_params": [] if row_params is None else sorted(row_params),
         }
 
         # write the plan to a file
@@ -467,12 +491,12 @@ class LivelogPlugin:
         if self._status_file is None:
             return
 
-        assert self._handler is None, (
-            "pytest_runtest_logstart called before pytest_runtest_logfinish"
-        )
+        if self._handler is not None:
+            raise RuntimeError("pytest_runtest_logstart called before pytest_runtest_logfinish")
 
         # a status file is only opened for workers, which always have a log path
-        assert self._log_path is not None
+        if self._log_path is None:
+            raise RuntimeError("worker log handler created without a log path")
         log_file = os.path.join(self._log_path, _create_log_name(nodeid))
 
         # open the handler and set it
@@ -496,9 +520,8 @@ class LivelogPlugin:
 
         # we can remove the handler and close it
         # since no one should be using it anymore
-        assert self._handler is not None, (
-            "pytest_runtest_logfinish called before pytest_runtest_logstart"
-        )
+        if self._handler is None:
+            raise RuntimeError("pytest_runtest_logfinish called before pytest_runtest_logstart")
         logging.getLogger().removeHandler(self._handler)
         self._handler = None
 
@@ -512,6 +535,27 @@ class LivelogPlugin:
     # file as well
     #
 
+    @contextlib.contextmanager
+    def _capture_output(self) -> Iterator[None]:
+        if self._handler is None:
+            raise RuntimeError("output capture started without a log handler")
+
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        stdout_handler = LivelogStdoutHandler(False, original_stdout, self._handler)
+        stderr_handler = LivelogStdoutHandler(True, original_stderr, self._handler)
+        sys.stdout = stdout_handler
+        sys.stderr = stderr_handler
+
+        try:
+            yield
+        finally:
+            # emit any trailing partial lines before restoring the real streams
+            stdout_handler.flush_partial()
+            stderr_handler.flush_partial()
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_setup(self, item: pytest.Item) -> Generator[None, object, object]:
         __tracebackhide__ = True
@@ -519,18 +563,8 @@ class LivelogPlugin:
         if not self._validate_worker():
             return (yield)
 
-        assert self._handler is not None
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-
-        sys.stdout = LivelogStdoutHandler(False, original_stdout, self._handler)
-        sys.stderr = LivelogStdoutHandler(True, original_stderr, self._handler)
-
-        try:
+        with self._capture_output():
             return (yield)
-        finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
 
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_call(self, item: pytest.Item) -> Generator[None, object, object]:
@@ -539,18 +573,8 @@ class LivelogPlugin:
         if not self._validate_worker():
             return (yield)
 
-        assert self._handler is not None
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-
-        sys.stdout = LivelogStdoutHandler(False, original_stdout, self._handler)
-        sys.stderr = LivelogStdoutHandler(True, original_stderr, self._handler)
-
-        try:
+        with self._capture_output():
             return (yield)
-        finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
 
     @pytest.hookimpl(trylast=True, wrapper=True)
     def pytest_runtest_teardown(self, item: pytest.Item) -> Generator[None, object, object]:
@@ -559,31 +583,22 @@ class LivelogPlugin:
         if not self._validate_worker():
             return (yield)
 
-        assert self._handler is not None
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-
-        sys.stdout = LivelogStdoutHandler(False, original_stdout, self._handler)
-        sys.stderr = LivelogStdoutHandler(True, original_stderr, self._handler)
-
-        try:
+        with self._capture_output():
             return (yield)
-        finally:
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
 
     def _validate_worker(self) -> bool:
         """
-        Validates the worker, either asserts
-        or return True if should run, if the
-        log capturing should not be done
-        returns False
+        Validates the worker: returns True if log capturing should run, False if
+        it should be skipped (no livelog), and raises if the worker is in an
+        inconsistent state.
         """
         if self._log_path is None:
             return False
 
-        assert self._handler is not None, "Didn't create log handler for worker"
-        assert self._status_file is not None, "Didn't create status file for worker"
+        if self._handler is None:
+            raise RuntimeError("Didn't create log handler for worker")
+        if self._status_file is None:
+            raise RuntimeError("Didn't create status file for worker")
         return True
 
     @pytest.fixture

@@ -28,7 +28,13 @@ dev = [
     "pytest>=8.3.2",
     "ruff>=0.5.6",
     "mypy>=1.8",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.5",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p pytester"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
