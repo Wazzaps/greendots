@@ -1,36 +1,62 @@
-[tool.poetry]
+[project]
 name = "greendots_plugin"
 version = "0.1.10"
 description = "Pytest plugin for generating greendots-compatible logs and status updates"
 authors = [
-    "Itay Almog <itay2828@gmail.com>",
-    "David Shlemayev <david.shlemayev@gmail.com>",
+    { name = "Itay Almog", email = "itay2828@gmail.com" },
+    { name = "David Shlemayev", email = "david.shlemayev@gmail.com" },
 ]
 license = "MIT"
-repository = "https://github.com/wazzaps/greendots"
+license-files = ["LICENSE"]
 readme = "README.md"
-packages = [{ include = "greendots_plugin" }]
-
+requires-python = ">=3.8"
 classifiers = [
     "Framework :: Pytest",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
 ]
+dependencies = []
 
-[tool.black]
-line-length = 99
+[project.urls]
+Repository = "https://github.com/wazzaps/greendots"
 
-[tool.poetry.dependencies]
-python = "^3.8"
+[project.entry-points.pytest11]
+greendots_plugin = "greendots_plugin.plugin"
 
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.3.2"
-ruff = "^0.5.6"
+[dependency-groups]
+dev = [
+    "pytest>=8.3.2",
+    "ruff>=0.5.6",
+    "mypy>=1.8",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.5",
+]
 
-[tool.poetry.plugins.pytest11]
-"greendots_plugin" = "greendots_plugin.plugin"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p pytester"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.11.28,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "greendots_plugin"
+
+[tool.ruff]
+line-length = 99
+# Keep the source importable on the declared floor (3.8) even though we
+# type-check against 3.10; this stops ruff suggesting 3.9+-only constructs.
+target-version = "py38"
+
+[tool.mypy]
+# mypy 2.x cannot target below 3.10. Runtime support down to 3.8 is kept via
+# `from __future__ import annotations` + ruff's py38 target, not by mypy.
+python_version = "3.10"
+strict = true
+files = ["greendots_plugin"]
+
+[[tool.mypy.overrides]]
+module = ["xdist", "xdist.*"]
+ignore_missing_imports = true
