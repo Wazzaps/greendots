@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -132,6 +134,24 @@ type greendotsConfig struct {
 	MaxLineSize         int                 `toml:"max_line_size" json:"max_line_size"`
 }
 
+type compressedAndUncompressedFileFoundError struct {
+	Path string
+}
+
+func (e *compressedAndUncompressedFileFoundError) Error() string {
+	return fmt.Sprintf("Both compressed (.gz) and uncompressed files found for %s", e.Path)
+}
+
+// returns true if the error is of type compressedAndUncompressedFileFoundError
+func isCompressedAndUncompressedError(e error) bool {
+	var comp_err *compressedAndUncompressedFileFoundError
+	if errors.As(e, &comp_err) {
+		return true
+	}
+
+	return false
+}
+
 var config = greendotsConfig{
 	StatusPoll: statusPollConfig{
 		SleepMs:   1000,
@@ -199,8 +219,14 @@ func getProjectRuns(project string) ([]run, error) {
 func getProjectMetadata(project string) (map[string]interface{}, error) {
 	metadataPath := filepath.Join(config.ProjectsDir, project, "metadata.toml")
 
+	data_file, _, err := openDataFile(metadataPath)
+	if err != nil {
+		return nil, err
+	}
+	defer data_file.Close()
+
 	var metadata map[string]interface{}
-	_, err := toml.DecodeFile(metadataPath, &metadata)
+	_, err = toml.NewDecoder(data_file).Decode(&metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -211,8 +237,14 @@ func getProjectMetadata(project string) (map[string]interface{}, error) {
 func getRunMetadata(project, run string) (map[string]interface{}, error) {
 	metadataPath := filepath.Join(config.ProjectsDir, project, run, "metadata.toml")
 
+	metadata_reader, _, err := openDataFile(metadataPath)
+	if err != nil {
+		return nil, err
+	}
+	defer metadata_reader.Close()
+
 	var metadata map[string]interface{}
-	_, err := toml.DecodeFile(metadataPath, &metadata)
+	_, err = toml.NewDecoder(metadata_reader).Decode(&metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -237,6 +269,99 @@ func fullWrite(w http.ResponseWriter, data string) error {
 
 func isDirTraversal(path string) bool {
 	return path[:1] == "." || strings.Contains(path, "/")
+}
+
+func checkFileZipped(path string) (realPath string, isZipped bool, err error) {
+	var compressed_path string = path + ".gz"
+
+	_, err_compressed := os.Stat(compressed_path)
+	_, err_uncompressed := os.Stat(path)
+
+	if err_uncompressed != nil && err_compressed != nil {
+		return "", false, os.ErrNotExist
+	}
+
+	if err_uncompressed == nil && err_compressed == nil {
+		// If there are a compressed and uncompressed files in the folder
+		// should return an error because this is undefined behaviour
+		return "", false, &compressedAndUncompressedFileFoundError{Path: path}
+	}
+
+	if err_compressed == nil {
+		return compressed_path, true, nil
+	}
+
+	return path, false, nil
+}
+
+type decompressedReadCloser struct {
+	isZipped bool
+	gz *gzip.Reader
+	f *os.File
+}
+
+func (g *decompressedReadCloser) Read(p []byte) (int, error) {
+	if g.isZipped {
+		return g.gz.Read(p)
+	}
+	return g.f.Read(p)
+}
+
+func (g *decompressedReadCloser) Close() error {
+	var err error = nil
+	if g.isZipped {
+		err = g.gz.Close()
+	}
+	cerr := g.f.Close()
+
+	if err == nil {
+		return cerr
+	}
+
+	return err
+}
+
+// openDataFile opens a data file for reading, transparently decompressing it
+// when it is gzip-compressed
+// The returned value is a ReadCloser struct
+func openDataFile(path string) (io.ReadCloser, string, error) {
+	real_path, is_zipped, err := checkFileZipped(path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	f, err := os.Open(real_path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	gz_reader := &gzip.Reader{}
+	if is_zipped {
+		gz_reader, err = gzip.NewReader(f)
+		if err != nil {
+			f.Close()
+			return nil, "", err
+		}
+	}
+	return &decompressedReadCloser{isZipped: is_zipped, gz: gz_reader, f: f}, real_path, nil
+}
+
+// dataFileSize returns the size of the uncompressed contents of a data file.
+// For plain files this is just the file size; for gzipped files the
+// decompressed size is computed by streaming through the data.
+func dataFileSize(path string) (int64, error) {
+	data_file, _, err := openDataFile(path)
+	if err != nil {
+		return 0, err
+	}
+	defer data_file.Close()
+
+	n, err := io.Copy(io.Discard, data_file)
+	if err != nil {
+		return 0, err
+	}
+
+	return n, nil
 }
 
 type runPlanCacheKey struct {
@@ -264,16 +389,16 @@ func getRunPlan(project string, run string) (*runPlan, error) {
 
 	// Read the plan file and cache it
 	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
-	planFd, err := os.Open(planPath)
+	plan_reader, _, err := openDataFile(planPath)
 	if err != nil {
 		return nil, err
 	}
-	defer planFd.Close()
+	defer plan_reader.Close()
 
 	val := runPlanCacheVal{
 		expiresAt: time.Now().Add(time.Duration(config.Caching.PlanCacheMs) * time.Millisecond),
 	}
-	err = json.NewDecoder(planFd).Decode(&val.plan)
+	err = json.NewDecoder(plan_reader).Decode(&val.plan)
 	if err != nil {
 		log.Printf("Failed to decode plan file '%s': %v", planPath, err)
 		return nil, err
@@ -351,6 +476,11 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 			metadata, err := getRunMetadata(projectEntry.Name(), run.Id)
 			if err != nil {
 				metadata = nil
+
+				if isCompressedAndUncompressedError(err) {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
 			}
 			run.Metadata = metadata
 		}
@@ -358,6 +488,11 @@ func projectsListHandler(w http.ResponseWriter, r *http.Request) {
 		metadata, err := getProjectMetadata(projectEntry.Name())
 		if err != nil {
 			metadata = nil
+
+			if isCompressedAndUncompressedError(err) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		projects = append(projects, project{
@@ -393,6 +528,11 @@ func projectRunsHandler(w http.ResponseWriter, r *http.Request) {
 		metadata, err := getRunMetadata(project, run.Id)
 		if err != nil {
 			metadata = nil
+
+			if isCompressedAndUncompressedError(err) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		run.Metadata = metadata
 	}
@@ -402,6 +542,43 @@ func projectRunsHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("%s %s: json encoder: %v", r.Method, r.URL.Path, err)
 		return
+	}
+}
+
+// http serves Reader as content
+func httpServeReader(w http.ResponseWriter, r *http.Request, read_closer io.Reader, real_path string) error {
+	modtime := time.Time{}
+	st, err := os.Stat(real_path)
+	if err != nil {
+		return err
+	}
+	modtime = st.ModTime()
+
+	data, err := io.ReadAll(read_closer)
+	if err != nil {
+		return err
+	}
+
+	http.ServeContent(w, r, filepath.Base(real_path), modtime, bytes.NewReader(data))
+	return nil
+}
+
+// serves a file with http, if zipped will be uncompressed and served using openDataFile
+func httpServeDataFile(w http.ResponseWriter, r *http.Request, path string) {
+	reader, real_path, err := openDataFile(path)
+	if err != nil {
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
+		return
+	}
+	defer reader.Close()
+
+	err = httpServeReader(w, r, reader, real_path)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }
 
@@ -415,7 +592,7 @@ func runPlanHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	planPath := filepath.Join(config.ProjectsDir, project, run, "plan.json")
-	http.ServeFile(w, r, planPath)
+	httpServeDataFile(w, r, planPath)
 }
 
 type statusResult struct {
@@ -437,7 +614,11 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := getRunPlan(project, run)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
 		return
 	}
 
@@ -458,13 +639,13 @@ func runStatusSummaryHandler(w http.ResponseWriter, r *http.Request) {
 				config.ProjectsDir, project, run,
 				fmt.Sprintf("status.%d.jsonl", idx),
 			)
-			fd, err := os.Open(statusSummaryPath)
+			status_reader, _, err := openDataFile(statusSummaryPath)
 			if err != nil {
 				return
 			}
-			defer fd.Close()
+			defer status_reader.Close()
 
-			scanner := bufio.NewScanner(fd)
+			scanner := bufio.NewScanner(status_reader)
 			final_offset := 0
 			for scanner.Scan() {
 				line := scanner.Bytes()
@@ -560,7 +741,7 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 		workers_to_check := []int{}
 		for i, expected_size := range expected_sizes {
 			statusPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%d.jsonl", i))
-			stat, err := os.Stat(statusPath)
+			size, err := dataFileSize(statusPath)
 			if err != nil {
 				// If the file doesn't exist, skip it and move on to the next file.
 				if os.IsNotExist(err) {
@@ -569,7 +750,7 @@ func runStatusPollHandler(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 				return
 			}
-			if stat.Size() > int64(expected_size) {
+			if size > int64(expected_size) {
 				workers_to_check = append(workers_to_check, i)
 			}
 		}
@@ -604,7 +785,7 @@ func runStatusStreamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	statusStreamPath := filepath.Join(config.ProjectsDir, project, run, fmt.Sprintf("status.%s.jsonl", worker_id))
-	http.ServeFile(w, r, statusStreamPath)
+	httpServeDataFile(w, r, statusStreamPath)
 }
 
 var LOGGER_NAME_BAD_CHARS = regexp.MustCompile("[^a-zA-Z0-9-_]")
@@ -694,17 +875,32 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	logFile, err := getTestLogFile(project, run, test)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
 		return
 	}
 
 	log_path := filepath.Join(config.ProjectsDir, project, run, logFile)
-	log_fd, err := os.Open(log_path)
+	
+	_, is_zipped, err := checkFileZipped(log_path)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer log_fd.Close()
+
+	log_reader, _, err := openDataFile(log_path)
+	if err != nil {
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
+		return
+	}
+	defer log_reader.Close()
 
 	// Send wrapper HTML
 	err = fullWriteBytes(w, logsViewPrefix)
@@ -728,24 +924,35 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		chunk := make([]byte, config.StatusStream.ChunkSize)
 		for {
-			n, err := log_fd.Read(chunk)
+			n, err := log_reader.Read(chunk)
 			if err != nil && err != io.EOF {
 				break
 			}
-			if n == 0 || err == io.EOF {
-				// Reached EOF, wait a bit before trying again
-				select {
-				case <-done:
-					return
-				case <-closed:
-					return
-				case <-time.After(time.Duration(config.StatusStream.EofSleepMs) * time.Millisecond):
+			if is_zipped {
+				err = fullWriteBytes(chunk_pipe_wr, bytes.ReplaceAll(chunk[:n], LT, LT_ESC))
+				if err != nil {
+					break
 				}
-				continue
-			}
-			err = fullWriteBytes(chunk_pipe_wr, bytes.ReplaceAll(chunk[:n], LT, LT_ESC))
-			if err != nil {
-				break
+				
+				if err == io.EOF {
+					break
+				}	
+			} else {
+				if n == 0 || err == io.EOF {
+					// Reached EOF, wait a bit before trying again
+					select {
+					case <-done:
+						return
+					case <-closed:
+						return
+					case <-time.After(time.Duration(config.StatusStream.EofSleepMs) * time.Millisecond):
+					}
+					continue
+				}
+				err = fullWriteBytes(chunk_pipe_wr, bytes.ReplaceAll(chunk[:n], LT, LT_ESC))
+				if err != nil {
+					break
+				}
 			}
 		}
 	}()
@@ -785,6 +992,7 @@ func logStreamHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logTailHandler(w http.ResponseWriter, r *http.Request) {
+	var MAXIMUM_RESPONSE_SIZE int64 = 128 * 1024
 	w.Header().Set("Content-Type", "text/html")
 
 	// Get line count from query
@@ -808,28 +1016,36 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 
 	logFile, err := getTestLogFile(project, run, test)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
 		return
 	}
 
 	log_path := filepath.Join(config.ProjectsDir, project, run, logFile)
-	log_fd, err := os.Open(log_path)
+
+	var log_reader io.ReadCloser
+
+	// gzip streams are not seekable, so read the whole (decompressed)
+	// file and tal the last N lines from it.
+	log_reader, _, err = openDataFile(log_path)
 	if err != nil {
-		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		if isCompressedAndUncompressedError(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		} else {
+			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		}
 		return
 	}
-	defer log_fd.Close()
+	defer log_reader.Close()
 
-	// Seek to last 128KB of log file, it will probably be enough
-	start_offset, err := log_fd.Seek(-128*1024, io.SeekEnd)
+	file_size, err := dataFileSize(log_path)
 	if err != nil {
-		start_offset, err = log_fd.Seek(0, io.SeekStart)
-		if err != nil {
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
-	is_start := start_offset == 0
 
 	// Send wrapper HTML
 	err = fullWriteBytes(w, tailLogsViewPrefix)
@@ -842,12 +1058,22 @@ func logTailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lines := []string{}
-	if is_start {
+
+	is_start := true
+	if file_size > MAXIMUM_RESPONSE_SIZE {
+		is_start = false
+		_, err = io.CopyN(io.Discard, log_reader, file_size - MAXIMUM_RESPONSE_SIZE)
+
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+	} else {
 		lines = append(lines, "-- LOG START --\n")
 	}
 
 	// Go over the log file and format it to html
-	scanner := bufio.NewScanner(log_fd)
+	scanner := bufio.NewScanner(log_reader)
 	last_date := ""
 	last_time := 0.0
 	if !is_start {
