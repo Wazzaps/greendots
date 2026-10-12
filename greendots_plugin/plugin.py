@@ -17,6 +17,8 @@ from typing import Any, TextIO
 
 import pytest
 
+from greendots_plugin import hookspecs
+
 
 class LivelogLoggingHandler(logging.Handler):
     def __init__(self, path: str) -> None:
@@ -475,11 +477,24 @@ class LivelogPlugin:
                 }
             )
 
+        # sorted so plan.json is deterministic across runs (row_params is a set)
+        default_row_params = [] if row_params is None else sorted(row_params)
+        override = session.config.hook.pytest_greendots_row_params(
+            session=session, row_params=default_row_params
+        )
+        if override is None:
+            final_row_params = default_row_params
+        elif isinstance(override, (list, tuple)) and all(isinstance(p, str) for p in override):
+            final_row_params = list(override)
+        else:
+            raise TypeError(
+                f"pytest_greendots_row_params must return a list of str or None, got {override!r}"
+            )
+
         plan = {
             "worker_count": self.worker_count,
             "groups": groups,
-            # sorted so plan.json is deterministic across runs (row_params is a set)
-            "row_params": [] if row_params is None else sorted(row_params),
+            "row_params": final_row_params,
         }
 
         # write the plan to a file
@@ -604,6 +619,10 @@ class LivelogPlugin:
     @pytest.fixture
     def live_progress(self, request: pytest.FixtureRequest) -> ProgressLogger:
         return ProgressLogger(self._status_file, request.node.nodeid)
+
+
+def pytest_addhooks(pluginmanager: pytest.PytestPluginManager) -> None:
+    pluginmanager.add_hookspecs(hookspecs)
 
 
 def pytest_configure(config: pytest.Config) -> None:

@@ -3,6 +3,8 @@ and asserting on the plan/status/log files the plugin writes."""
 
 import json
 
+import pytest
+
 
 def read_jsonl(path):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
@@ -80,6 +82,89 @@ def test_row_params_is_intersection_of_param_keys(pytester):
     _result, livelog = run(pytester)
     plan = json.loads((livelog / "plan.json").read_text())
     assert plan["row_params"] == ["arch"]  # only key shared by every test
+
+
+def test_row_params_hook_overrides_empty_default(pytester):
+    pytester.makepyfile(
+        conftest="""
+        def pytest_greendots_row_params(session, row_params):
+            return ["size", "arch"]
+        """,
+        test_mod="""
+        import pytest
+
+        @pytest.mark.parametrize("arch", ["x86", "arm"])
+        @pytest.mark.parametrize("size", [1, 2])
+        def test_a(arch, size):
+            pass
+
+        def test_b():
+            pass
+        """,
+    )
+    result, livelog = run(pytester)
+    result.assert_outcomes(passed=5)
+    plan = json.loads((livelog / "plan.json").read_text())
+    # test_b shares no params, yet the hook's choice wins, in the hook's order
+    assert plan["row_params"] == ["size", "arch"]
+
+
+def test_row_params_hook_receives_defaults(pytester):
+    pytester.makepyfile(
+        conftest="""
+        def pytest_greendots_row_params(session, row_params):
+            return row_params + ["size"]
+        """,
+        test_mod="""
+        import pytest
+
+        @pytest.mark.parametrize("arch", ["x86", "arm"])
+        @pytest.mark.parametrize("size", [1, 2])
+        def test_a(arch, size):
+            pass
+
+        @pytest.mark.parametrize("arch", ["x86", "arm"])
+        def test_b(arch):
+            pass
+        """,
+    )
+    _result, livelog = run(pytester)
+    plan = json.loads((livelog / "plan.json").read_text())
+    assert plan["row_params"] == ["arch", "size"]
+
+
+def test_row_params_hook_returning_none_keeps_defaults(pytester):
+    pytester.makepyfile(
+        conftest="""
+        def pytest_greendots_row_params(session, row_params):
+            return None
+        """,
+        test_mod="""
+        import pytest
+
+        @pytest.mark.parametrize("arch", ["x86", "arm"])
+        def test_a(arch):
+            pass
+        """,
+    )
+    _result, livelog = run(pytester)
+    plan = json.loads((livelog / "plan.json").read_text())
+    assert plan["row_params"] == ["arch"]
+
+
+def test_row_params_hook_invalid_return_fails_loudly(pytester):
+    # a bare str is iterable; it must not be silently split into characters
+    pytester.makepyfile(
+        conftest="""
+        def pytest_greendots_row_params(session, row_params):
+            return "arch"
+        """,
+        test_mod="def test_x(): pass",
+    )
+    result, livelog = run(pytester)
+    assert result.ret == pytest.ExitCode.INTERNAL_ERROR
+    result.stdout.fnmatch_lines(["*pytest_greendots_row_params must return a list of str*"])
+    assert not (livelog / "plan.json").exists()
 
 
 def test_skip_plan_creation_keeps_existing_plan(pytester):

@@ -148,3 +148,28 @@ def test_distributed_run_records_all_tests_across_workers(pytester):
         "test_c": "passed",
         "test_d": "passed",
     }
+
+
+def test_row_params_hook_applies_on_plan_writing_worker(pytester):
+    # the plan is written by gw0, so the conftest hook must be honored there
+    pytester.makepyfile(
+        conftest="""
+        def pytest_greendots_row_params(session, row_params):
+            return ["arch"]
+        """,
+        test_mod="""
+        import pytest
+
+        @pytest.mark.parametrize("arch", ["x86", "arm"])
+        def test_a(arch):
+            pass
+
+        def test_b():
+            pass
+        """,
+    )
+    livelog = pytester.path / "livelog"
+    result = pytester.runpytest_subprocess("-n", "2", "--livelog", str(livelog))
+    result.assert_outcomes(passed=3)
+    plan = json.loads((livelog / "plan.json").read_text())
+    assert plan["row_params"] == ["arch"]
