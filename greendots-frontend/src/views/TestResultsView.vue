@@ -719,6 +719,9 @@ nav > div {
 .row-highlight,
 .col-highlight {
   background: #413f4a;
+  /* These move with the cursor; if the browser picks one as its scroll anchor it
+     scrolls to follow it, which moves the cursor to another row, in a loop */
+  overflow-anchor: none;
 }
 .row-highlight {
   grid-column: 1 / calc(var(--col-count) + 3);
