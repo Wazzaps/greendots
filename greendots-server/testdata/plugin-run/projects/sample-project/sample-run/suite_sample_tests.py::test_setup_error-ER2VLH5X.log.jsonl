@@ -1,0 +1,1 @@
+{"name": "root", "level": "ERROR", "time": 1791789610.684242, "message": "@pytest.fixture\n    def broken_fixture():\n>       raise RuntimeError(\"fixture setup failed\")\nE       RuntimeError: fixture setup failed\n\nsuite/sample_tests.py:31: RuntimeError"}

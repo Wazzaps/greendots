@@ -1,0 +1,23 @@
+{"type": "start", "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6762376}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6766098}
+{"type": "progress", "percentage": 0.5, "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6768315}
+{"type": "progress", "percentage": 1.0, "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6768427}
+{"type": "call", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6769395}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.677081}
+{"type": "finish", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-1]", "time": 1791789610.6771355}
+{"type": "start", "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6775312}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6777494}
+{"type": "progress", "percentage": 0.5, "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6779072}
+{"type": "progress", "percentage": 1.0, "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6779182}
+{"type": "call", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6779928}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6797085}
+{"type": "finish", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[x86-2]", "time": 1791789610.6797593}
+{"type": "start", "test": "suite/sample_tests.py::test_setup_error", "time": 1791789610.6800723}
+{"type": "setup", "outcome": "failed", "test": "suite/sample_tests.py::test_setup_error", "exception": "@pytest.fixture\n    def broken_fixture():\n>       raise RuntimeError(\"fixture setup failed\")\nE       RuntimeError: fixture setup failed\n\nsuite/sample_tests.py:31: RuntimeError", "time": 1791789610.684278}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_setup_error", "time": 1791789610.68447}
+{"type": "finish", "outcome": "failed", "test": "suite/sample_tests.py::test_setup_error", "time": 1791789610.6845145}
+{"type": "start", "test": "suite/sample_tests.py::test_special_chars[a/b]", "time": 1791789610.6848655}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[a/b]", "time": 1791789610.6850097}
+{"type": "call", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[a/b]", "time": 1791789610.6851964}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[a/b]", "time": 1791789610.6853046}
+{"type": "finish", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[a/b]", "time": 1791789610.6853487}

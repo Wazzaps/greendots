@@ -1,0 +1,23 @@
+{"type": "start", "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6762476}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.676551}
+{"type": "progress", "percentage": 0.5, "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6767507}
+{"type": "progress", "percentage": 1.0, "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6767616}
+{"type": "call", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6768556}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6769938}
+{"type": "finish", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-1]", "time": 1791789610.6770427}
+{"type": "start", "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.6773944}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.6776154}
+{"type": "progress", "percentage": 0.5, "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.6777654}
+{"type": "progress", "percentage": 1.0, "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.6777763}
+{"type": "call", "outcome": "failed", "test": "suite/sample_tests.py::test_matrix[arm-2]", "exception": "arch = 'arm', variant = 2\nlive_progress = <greendots_plugin.plugin.ProgressLogger object at 0x7f99fb9d8e10>\n\n    @pytest.mark.parametrize(\"variant\", [1, 2])\n    @pytest.mark.parametrize(\"arch\", [\"x86\", \"arm\"])\n    def test_matrix(arch, variant, live_progress):\n        log.info(\"checking %s variant %d <b>not bold</b> & co\", arch, variant)\n        print(f\"stdout from {arch}-{variant}\")\n        live_progress(0.5)\n        live_progress.done()\n>       assert not (arch == \"arm\" and variant == 2), \"arm variant 2 is broken\"\nE       AssertionError: arm variant 2 is broken\nE       assert not ('arm' == 'arm'\nE         \nE           arm and 2 == 2)\n\nsuite/sample_tests.py:21: AssertionError", "time": 1791789610.6835296}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.683763}
+{"type": "finish", "outcome": "failed", "test": "suite/sample_tests.py::test_matrix[arm-2]", "time": 1791789610.6838126}
+{"type": "start", "test": "suite/sample_tests.py::test_skipped", "time": 1791789610.684139}
+{"type": "setup", "outcome": "skipped", "test": "suite/sample_tests.py::test_skipped", "reason": "Skipped: not supported here", "time": 1791789610.6843503}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_skipped", "time": 1791789610.6844647}
+{"type": "finish", "outcome": "skipped", "test": "suite/sample_tests.py::test_skipped", "time": 1791789610.684506}
+{"type": "start", "test": "suite/sample_tests.py::test_special_chars[c<d>]", "time": 1791789610.6848779}
+{"type": "setup", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[c<d>]", "time": 1791789610.6850183}
+{"type": "call", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[c<d>]", "time": 1791789610.6852007}
+{"type": "teardown", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[c<d>]", "time": 1791789610.6853087}
+{"type": "finish", "outcome": "passed", "test": "suite/sample_tests.py::test_special_chars[c<d>]", "time": 1791789610.6853561}

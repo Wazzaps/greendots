@@ -1133,6 +1133,35 @@ func nocache(handler func(w http.ResponseWriter, r *http.Request)) func(w http.R
 	}
 }
 
+// registerRoutes registers all of the server's handlers on the given mux
+func registerRoutes(mux *http.ServeMux) error {
+	sub, err := fs.Sub(dist, "frontend-dist")
+	if err != nil {
+		return err
+	}
+	mux.Handle("GET /assets/", http.FileServer(http.FS(sub)))
+
+	mux.HandleFunc("GET /favicon.ico", nocache(serveIconHandler))
+
+	mux.HandleFunc("GET /api/v1/config", nocache(configHandler))
+	mux.HandleFunc("GET /api/v1/version", nocache(versionHandler))
+	mux.HandleFunc("GET /api/v1/projects", nocache(projectsListHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs", nocache(projectRunsHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/plan", nocache(runPlanHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", nocache(runStatusSummaryHandler))
+	mux.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", nocache(runStatusPollHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", nocache(runStatusStreamHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", nocache(logStreamHandler))
+	mux.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", nocache(logTailHandler))
+	mux.HandleFunc("GET /api/", docsHandler)
+
+	// TODO: use etag caching instead of nocache
+	// the assets doesn't need nocache nor etag since it has hashes in the name
+	// of the files so it handles it on its own
+	mux.HandleFunc("/", nocache(serveFrontendHandler))
+	return nil
+}
+
 func main() {
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "Show the version and exit")
@@ -1152,30 +1181,12 @@ func main() {
 		log.Fatalln("Failed to parse config file:", err)
 	}
 
-	sub, err := fs.Sub(dist, "frontend-dist")
+	// The default mux also serves the `net/http/pprof` handlers
+	err = registerRoutes(http.DefaultServeMux)
 	if err != nil {
-		log.Fatalln("Failed to parse config file:", err)
+		log.Fatalln("Failed to load the embedded frontend:", err)
 	}
-	http.Handle("GET /assets/", http.FileServer(http.FS(sub)))
 
-	http.HandleFunc("GET /favicon.ico", nocache(serveIconHandler))
-
-	http.HandleFunc("GET /api/v1/config", nocache(configHandler))
-	http.HandleFunc("GET /api/v1/version", nocache(versionHandler))
-	http.HandleFunc("GET /api/v1/projects", nocache(projectsListHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs", nocache(projectRunsHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/plan", nocache(runPlanHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_summary", nocache(runStatusSummaryHandler))
-	http.HandleFunc("POST /api/v1/projects/{project}/runs/{run}/status_poll", nocache(runStatusPollHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/status_stream/{worker_id}", nocache(runStatusStreamHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_stream", nocache(logStreamHandler))
-	http.HandleFunc("GET /api/v1/projects/{project}/runs/{run}/test/{test}/log_tail", nocache(logTailHandler))
-	http.HandleFunc("GET /api/", docsHandler)
-
-	// TODO: use etag caching instead of nocache
-	// the assets doesn't need nocache nor etag since it has hashes in the name
-	// of the files so it handles it on its own
-	http.HandleFunc("/", nocache(serveFrontendHandler))
 	log.Printf("Listening on %s", config.ListenAddress)
 	err = http.ListenAndServe(config.ListenAddress, nil)
 	if err != nil {

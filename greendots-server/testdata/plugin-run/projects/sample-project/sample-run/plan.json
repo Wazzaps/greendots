@@ -1,0 +1,72 @@
+{
+    "groups": {
+        "sample_tests": [
+            {
+                "id": "suite/sample_tests.py::test_matrix[x86-1]",
+                "log_file": "suite_sample_tests.py::test_matrix[x86-1]-47IENBXA.log.jsonl",
+                "name": "test_matrix",
+                "params": {
+                    "arch": "x86",
+                    "variant": 1
+                }
+            },
+            {
+                "id": "suite/sample_tests.py::test_matrix[x86-2]",
+                "log_file": "suite_sample_tests.py::test_matrix[x86-2]-RI6C2VSP.log.jsonl",
+                "name": "test_matrix",
+                "params": {
+                    "arch": "x86",
+                    "variant": 2
+                }
+            },
+            {
+                "id": "suite/sample_tests.py::test_matrix[arm-1]",
+                "log_file": "suite_sample_tests.py::test_matrix[arm-1]-FIMGFZVV.log.jsonl",
+                "name": "test_matrix",
+                "params": {
+                    "arch": "arm",
+                    "variant": 1
+                }
+            },
+            {
+                "id": "suite/sample_tests.py::test_matrix[arm-2]",
+                "log_file": "suite_sample_tests.py::test_matrix[arm-2]-QXGVYABZ.log.jsonl",
+                "name": "test_matrix",
+                "params": {
+                    "arch": "arm",
+                    "variant": 2
+                }
+            },
+            {
+                "id": "suite/sample_tests.py::test_skipped",
+                "log_file": "suite_sample_tests.py::test_skipped-FS3LLOO3.log.jsonl",
+                "name": "test_skipped",
+                "params": {}
+            },
+            {
+                "id": "suite/sample_tests.py::test_setup_error",
+                "log_file": "suite_sample_tests.py::test_setup_error-ER2VLH5X.log.jsonl",
+                "name": "test_setup_error",
+                "params": {}
+            },
+            {
+                "id": "suite/sample_tests.py::test_special_chars[a/b]",
+                "log_file": "suite_sample_tests.py::test_special_chars[a_b]-PMWY4NA4.log.jsonl",
+                "name": "test_special_chars",
+                "params": {
+                    "path": "a/b"
+                }
+            },
+            {
+                "id": "suite/sample_tests.py::test_special_chars[c<d>]",
+                "log_file": "suite_sample_tests.py::test_special_chars[c_d_]-RHQEXQIR.log.jsonl",
+                "name": "test_special_chars",
+                "params": {
+                    "path": "c<d>"
+                }
+            }
+        ]
+    },
+    "row_params": [],
+    "worker_count": 2
+}

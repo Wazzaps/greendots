@@ -14,3 +14,19 @@ User documentation is limited at the moment, but here's a screenshot:
 ## Building
 
 The dockerfile should build the server using `npm`, `vite`, and `go`. Internet is required during the docker build.
+
+## Testing the server
+
+The tests need the same generated files as a build (`go generate`, which needs the frontend built and `minify` installed, see the dockerfile):
+
+```sh
+cd greendots-server
+go generate .
+go test -race ./...
+```
+
+Go tests run per package, so pass `.` or `./...`, not a test file (a file is compiled alone, without the server code it tests). To run some of the tests, select them by name, e.g. `go test -race -run 'TestLogTail|TestStatusPoll' .`, or a single case with `-run 'TestLogTail/gzip/long_lines'`.
+
+Use `-race`: without it, `TestConcurrentRequests` only catches data races that happen to crash the server, and it fails on single-CPU machines, where it can't.
+
+`greendots-server/testdata/plugin-run` holds output recorded from the real pytest plugin. Rerun its `regenerate.sh` when the plugin's output format changes.
